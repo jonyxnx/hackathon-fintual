@@ -25,8 +25,26 @@ export async function POST(req: Request) {
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const encoder = new TextEncoder();
-      const send = (event: string, data: unknown) =>
-        controller.enqueue(encoder.encode(sseLine(event, data)));
+      let closed = false;
+      const sendRaw = (chunk: string): boolean => {
+        if (closed) return false;
+        try {
+          controller.enqueue(encoder.encode(chunk));
+          return true;
+        } catch {
+          closed = true;
+          return false;
+        }
+      };
+      const send = (event: string, data: unknown) => sendRaw(sseLine(event, data));
+      const heartbeat = setInterval(() => {
+        sendRaw(": ping\n\n");
+      }, 10_000);
+
+      req.signal.addEventListener("abort", () => {
+        closed = true;
+        clearInterval(heartbeat);
+      });
 
       send("job", { jobId });
 
@@ -35,17 +53,21 @@ export async function POST(req: Request) {
           url: body.url!,
           provider: body.provider,
         })) {
-          send(evt.type, evt);
+          if (!send(evt.type, evt)) break;
           if (evt.type === "complete") {
             const zip = await zipResults(evt.results);
             setJobArtifact(jobId, zip, evt.results);
-            send("download", { jobId, url: `/api/download/${jobId}` });
+            if (!send("download", { jobId, url: `/api/download/${jobId}` })) break;
           }
         }
       } catch (err) {
         send("error", { error: (err as Error).message ?? String(err) });
       } finally {
-        controller.close();
+        clearInterval(heartbeat);
+        if (!closed) {
+          closed = true;
+          controller.close();
+        }
       }
     },
   });

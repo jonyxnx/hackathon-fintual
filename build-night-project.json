@@ -1,5 +1,5 @@
 {
-  "project-name": "<FILL THIS>",
-  "project-oneliner": "<FILL THIS>",
-  "project-description": "<FILL THIS>"
+  "project-name": "kitdoc",
+  "project-oneliner": "Concise developer docs from any GitHub repository.",
+  "project-description": "kitdoc turns a GitHub repo into readable developer documentation, a file map, and an AGENTS.md guide using an LLM. It is built for fast handoffs, onboarding, and Notion-ready project documentation."
 }

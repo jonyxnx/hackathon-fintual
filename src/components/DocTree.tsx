@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 export interface DocNavItem {
   id: string;
@@ -73,6 +73,7 @@ interface FileNode {
   path: string;
   type: "folder" | "file";
   children: Map<string, FileNode>;
+  fileCount: number;
 }
 
 function buildFileTree(files: string[]): FileNode[] {
@@ -86,9 +87,10 @@ function buildFileTree(files: string[]): FileNode[] {
       const isFile = index === parts.length - 1;
       let node = children.get(part);
       if (!node) {
-        node = { name: part, path: currentPath, type: isFile ? "file" : "folder", children: new Map() };
+        node = { name: part, path: currentPath, type: isFile ? "file" : "folder", children: new Map(), fileCount: 0 };
         children.set(part, node);
       }
+      node.fileCount += 1;
       children = node.children;
     });
   }
@@ -105,20 +107,38 @@ function sortFileNodes(nodes: FileNode[]): FileNode[] {
 }
 
 function FileNodeView({ node, depth }: { node: FileNode; depth: number }) {
+  const [open, setOpen] = useState(false);
   const children = [...node.children.values()];
-  return (
-    <div>
-      <div
-        className="truncate rounded-lg px-2 py-1 font-mono text-xs text-stone-500"
-        style={{ paddingLeft: 8 + depth * 14 }}
-        title={node.path}
-      >
-        <span className="mr-1">{node.type === "folder" ? "▸" : "·"}</span>
-        {node.name}
+  const isFolder = node.type === "folder";
+
+  if (isFolder) {
+    return (
+      <div>
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          className="flex w-full items-center gap-1 truncate rounded-lg px-2 py-1 font-mono text-xs text-stone-600 hover:bg-stone-100"
+          style={{ paddingLeft: 8 + depth * 14 }}
+          title={node.path}
+          aria-expanded={open}
+        >
+          <span className="w-3 shrink-0 text-stone-400">{open ? "▾" : "▸"}</span>
+          <span className="min-w-0 flex-1 truncate text-left">{node.name}</span>
+          <span className="shrink-0 text-[10px] text-stone-400">{node.fileCount}</span>
+        </button>
+        {open && children.map((child) => <FileNodeView key={child.path} node={child} depth={depth + 1} />)}
       </div>
-      {children.map((child) => (
-        <FileNodeView key={child.path} node={child} depth={depth + 1} />
-      ))}
+    );
+  }
+
+  return (
+    <div
+      className="truncate rounded-lg px-2 py-1 font-mono text-xs text-stone-500"
+      style={{ paddingLeft: 8 + depth * 14 }}
+      title={node.path}
+    >
+      <span className="mr-1 text-stone-300">·</span>
+      {node.name}
     </div>
   );
 }
