@@ -2,8 +2,8 @@ import path from "node:path";
 import type { Generator } from "./index";
 import { SYSTEM_PROMPT, buildFileBlocks, notDetectedStub } from "./index";
 
-const SAMPLE_LIMIT = 18;
-const FILE_TREE_LIMIT = 240;
+const SAMPLE_LIMIT = 30;
+const FILE_TREE_LIMIT = 400;
 
 const SOURCE_EXTS = new Set([
   ".ts",
@@ -62,6 +62,17 @@ function pickRepresentativeFiles(files: string[]): string[] {
     .slice(0, SAMPLE_LIMIT);
 }
 
+function directSubdirs(files: string[], folder: string): string[] {
+  const prefix = folder ? `${folder}/` : "";
+  const set = new Set<string>();
+  for (const file of files) {
+    const rest = file.slice(prefix.length);
+    const idx = rest.indexOf("/");
+    if (idx > 0) set.add(rest.slice(0, idx));
+  }
+  return [...set].sort();
+}
+
 export function folderGenerator(folder: string): Generator {
   const normalizedFolder = normalizeFolder(folder);
 
@@ -81,29 +92,36 @@ export function folderGenerator(folder: string): Generator {
       }
 
       const sampleFiles = pickRepresentativeFiles(files);
-      const fileBlocks = await buildFileBlocks(ctx, sampleFiles, 12 * 1024);
+      const fileBlocks = await buildFileBlocks(ctx, sampleFiles, 14 * 1024);
+      const subdirs = directSubdirs(files, normalizedFolder);
 
-      const user = `Write focused documentation for the \`${normalizedFolder}\` folder in \`${ctx.owner}/${ctx.repo}\`.
+      const user = `Write deep, internal documentation for the \`${normalizedFolder}\` folder in \`${ctx.owner}/${ctx.repo}\`.
+
+This folder contains ${files.length} files across ${subdirs.length} immediate subfolders. Be thorough and specific: a developer should be able to work here without opening every file.
+
+Immediate subfolders: ${subdirs.length ? subdirs.join(", ") : "(none)"}
 
 Folder file tree (truncated):
 \`\`\`
 ${folderFileTree(files)}
 \`\`\`
 
-Representative files:
+Representative file contents:
 
 ${fileBlocks || "(no representative source files found)"}
 
 Produce internal folder documentation:
 1. \`# ${normalizedFolder}\` heading.
-2. \`## Purpose\` - what this folder appears to own.
-3. \`## Structure\` - important subfolders and key files.
-4. \`## Key modules and responsibilities\` - explain the main files/classes/functions visible from the samples.
-5. \`## Connections\` - how this folder appears to interact with the rest of the repo.
-6. \`## Change map\` - where a developer or coding agent should start for common changes in this folder.
-7. \`## Agent notes\` - practical cautions, verification hints, and unknowns that should be checked before editing.`;
+2. \`## Purpose\` - what this folder owns and why it exists.
+3. \`## Structure\` - each immediate subfolder and the most important files, with a one-line role for each.
+4. \`## Key modules and responsibilities\` - explain the main files/classes/functions visible from the samples, including notable exports and what calls them.
+5. \`## Data flow\` - how data/control moves through this folder when the evidence supports it.
+6. \`## Connections\` - imports from and exports to the rest of the repo, plus external libraries used here.
+7. \`## Change map\` - common tasks (add/modify/remove behavior) mapped to the exact files to open first.
+8. \`## Fast lookup\` - which symbols to search and which files to read first for the most common questions about this folder.
+9. \`## Agent notes\` - practical cautions, verification hints, and unknowns that should be checked before editing.`;
 
-      const content = await llm.complete({ system: SYSTEM_PROMPT, user, maxTokens: 4500 });
+      const content = await llm.complete({ system: SYSTEM_PROMPT, user, maxTokens: 5500 });
       return { filename: `${normalizedFolder}.md`, content, signals: sampleFiles };
     },
   };

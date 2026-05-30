@@ -62,6 +62,9 @@ jobs:
           llm-provider: openai # anthropic
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
 
+          # Document every folder in the repo, not just the ones changed in this push.
+          document-all: "true"
+
           # Notion destination.
           notion-token: ${{ secrets.NOTION_TOKEN }}
           notion-page-id: ${{ secrets.NOTION_PAGE_ID }}

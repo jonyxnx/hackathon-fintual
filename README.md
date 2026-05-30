@@ -39,7 +39,15 @@ Have fun! 🚀
 
 ## Kitdoc Notion Docs
 
-This repo includes a reusable GitHub Action that documents a repository and syncs generated markdown to Notion. Each run creates or updates a root `AGENTS.md` page for repo-wide agent guidance, then creates or updates pages for the top-level folders changed in a pull request. Every folder page also gets a nested `AGENTS.md` with per-file summaries, change maps, and fast lookup tips.
+This repo includes a reusable GitHub Action that documents a repository and syncs generated markdown to Notion as a nested, developer-facing documentation tree built by an LLM.
+
+For each run it creates a repo page and, beneath it, a page-in-page hierarchy that mirrors the codebase:
+
+- A folder page for every directory (with a usage-based emoji icon), containing its own `AGENTS.md`.
+- A page for every documentable file, nested under its folder page, with summary, key contents, what to change, fast-lookup tips, dependencies, and gotchas.
+- A root `AGENTS.md` that acts as the documentation index and coverage report: it lists what has been documented, flags gaps, and recommends what is still missing.
+
+Pull-request runs document the changed top-level folders; the self-doc workflow uses `document-all: "true"` to document the entire repository.
 
 Required repository secrets:
 
@@ -87,4 +95,4 @@ jobs:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
 ```
 
-The action checks out the target repository with full git history, checks out the kitdoc repository separately, runs `npm ci` for kitdoc, creates the root `AGENTS.md` Notion page, and then runs the CLI against the target checkout using the pull request base and head SHAs. Each documented folder gets its own `AGENTS.md` child page.
+The action checks out the target repository with full git history, checks out the kitdoc repository separately, runs `npm ci` for kitdoc, and runs the CLI against the target checkout. It documents every folder and file as a nested page tree, then generates the root `AGENTS.md` index + coverage report last so it can reflect everything that was produced. Per-file pages are capped by `--max-files` (default 300).

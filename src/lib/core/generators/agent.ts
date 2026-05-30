@@ -79,9 +79,43 @@ function fileTreeList(files: string[], maxEntries = 400): string {
   return list.map((file) => `- \`${file}\``).join("\n") + (more > 0 ? `\n- ... (${more} more files)` : "");
 }
 
+export interface DocManifestEntry {
+  /** Repo-relative path of the documented file or folder. */
+  path: string;
+  kind: "folder" | "file";
+}
+
+export interface DocManifest {
+  documented: DocManifestEntry[];
+  /** Files intentionally not given a dedicated doc page (assets, lockfiles, etc.). */
+  skipped: string[];
+}
+
+function manifestSection(manifest: DocManifest, totalFiles: number): string {
+  const folders = manifest.documented.filter((e) => e.kind === "folder").map((e) => e.path);
+  const files = manifest.documented.filter((e) => e.kind === "file").map((e) => e.path);
+  const lines = [
+    `Documentation pages already generated in Notion for this run:`,
+    ``,
+    `- Folder pages (${folders.length}):`,
+    ...folders.slice(0, 200).map((f) => `  - \`${f}\``),
+    folders.length > 200 ? `  - ... (${folders.length - 200} more)` : "",
+    ``,
+    `- File pages (${files.length} of ${totalFiles} files):`,
+    ...files.slice(0, 300).map((f) => `  - \`${f}\``),
+    files.length > 300 ? `  - ... (${files.length - 300} more)` : "",
+    ``,
+    `- Files skipped (no dedicated page; ${manifest.skipped.length}):`,
+    ...manifest.skipped.slice(0, 100).map((f) => `  - \`${f}\``),
+    manifest.skipped.length > 100 ? `  - ... (${manifest.skipped.length - 100} more)` : "",
+  ];
+  return lines.filter((l) => l !== "").join("\n");
+}
+
 export async function generateAgentsDoc(
   ctx: RepoContext,
   llm: LLMProvider,
+  manifest?: DocManifest,
 ): Promise<GeneratorResult> {
   const contextFiles = await ctx.findFiles(AGENT_CONTEXT_PATTERNS, 24);
   const sourceSamples = ctx.sampleSourceFiles(24);
@@ -89,9 +123,26 @@ export async function generateAgentsDoc(
   const fileBlocks = await buildFileBlocks(ctx, paths, 10 * 1024);
   const topDirs = ctx.topDirs();
 
+  const coverageBlock = manifest
+    ? `\n\nDocumentation coverage for this run:\n\n${manifestSection(manifest, ctx.fileTree.length)}`
+    : "";
+
+  const coverageSections = manifest
+    ? `
+9. \`## Documentation index\` - explain how the Notion documentation tree is organized (repo page → folder pages → nested folder/file pages, each folder has its own AGENTS.md) and how a developer should navigate it.
+10. \`## Documentation coverage\` - based on the coverage data above, summarize what is documented (folders and files) and call out which areas are thin or missing dedicated pages.
+11. \`## Gaps and recommended additions\` - list specific files, folders, or topics that still need documentation or deeper coverage, and what each new doc should contain. This is the "what's missing, add it" section.
+12. \`## CI and automation\` - GitHub Actions / Notion sync / deploy hooks when visible.
+13. \`## Change safety checklist\` - checks before handing off changes.
+14. \`## Unknowns to verify\` - facts not visible from provided files.`
+    : `
+9. \`## CI and automation\` - GitHub Actions / Notion sync / deploy hooks when visible.
+10. \`## Change safety checklist\` - checks before handing off changes.
+11. \`## Unknowns to verify\` - facts not visible from provided files.`;
+
   const user = `Write a root **AGENTS.md** file for \`${ctx.owner}/${ctx.repo}\`.
 
-This document lives on the Notion repo page and is the primary operating guide for coding agents and new developers. It must help someone work fast without reading the entire repository.
+This document lives on the Notion repo page. It is BOTH the primary operating guide for coding agents/new developers AND the index for the documentation tree generated alongside it. It must help someone work fast without reading the entire repository, and it must describe what documentation already exists and what is still missing.
 
 Repo ref: ${ctx.ref}
 Top-level directories: ${topDirs.join(", ") || "(none)"}
@@ -106,7 +157,7 @@ ${ctx.fileTreePreview(320)}
 
 Repository evidence (key files):
 
-${fileBlocks || "(no representative files found)"}
+${fileBlocks || "(no representative files found)"}${coverageBlock}
 
 Produce:
 1. \`# AGENTS.md\` heading.
@@ -116,12 +167,9 @@ Produce:
 5. \`## Repo mental model\` - main systems, entry points, and data flow grounded in evidence.
 6. \`## Local workflow\` - install, run, build, test, and verification commands when visible.
 7. \`## Folder guide\` - one short bullet per top-level folder: purpose, key files, and what kind of changes belong there.
-8. \`## Coding rules\` - conventions and safety rules grounded in the files.
-9. \`## CI and automation\` - GitHub Actions / Notion sync / deploy hooks when visible.
-10. \`## Change safety checklist\` - checks before handing off changes.
-11. \`## Unknowns to verify\` - facts not visible from provided files.`;
+8. \`## Coding rules\` - conventions and safety rules grounded in the files.${coverageSections}`;
 
-  const content = await llm.complete({ system: SYSTEM_PROMPT, user, maxTokens: 6000 });
+  const content = await llm.complete({ system: SYSTEM_PROMPT, user, maxTokens: 7000 });
   return { filename: "AGENTS.md", content, signals: paths };
 }
 

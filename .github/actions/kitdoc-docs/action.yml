@@ -50,6 +50,10 @@ inputs:
   openai-api-key:
     description: OpenAI API key, required when llm-provider is openai.
     required: false
+  document-all:
+    description: Document every folder in the repository instead of only the folders changed between base and head.
+    required: false
+    default: "false"
 
 runs:
   using: composite
@@ -86,10 +90,19 @@ runs:
         OPENAI_API_KEY: ${{ inputs.openai-api-key }}
         TARGET_DIR: ${{ github.workspace }}/${{ inputs.target-path }}
       run: |
-        npm run kitdoc -- \
-          --dir "$TARGET_DIR" \
-          --base "${{ inputs.base-sha }}" \
-          --head "${{ inputs.head-sha }}" \
-          --owner "${{ inputs.repo-owner }}" \
-          --repo "${{ inputs.repo-name }}" \
-          --provider "${{ inputs.llm-provider }}"
+        if [ "${{ inputs.document-all }}" = "true" ]; then
+          npm run kitdoc -- \
+            --dir "$TARGET_DIR" \
+            --all \
+            --owner "${{ inputs.repo-owner }}" \
+            --repo "${{ inputs.repo-name }}" \
+            --provider "${{ inputs.llm-provider }}"
+        else
+          npm run kitdoc -- \
+            --dir "$TARGET_DIR" \
+            --base "${{ inputs.base-sha }}" \
+            --head "${{ inputs.head-sha }}" \
+            --owner "${{ inputs.repo-owner }}" \
+            --repo "${{ inputs.repo-name }}" \
+            --provider "${{ inputs.llm-provider }}"
+        fi

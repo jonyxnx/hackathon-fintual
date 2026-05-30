@@ -22,6 +22,10 @@ export interface NotionPageRef {
   created: boolean;
 }
 
+function emojiIcon(emoji?: string): { type: "emoji"; emoji: string } | undefined {
+  return emoji ? { type: "emoji", emoji: emoji as never } : undefined;
+}
+
 export class NotionDocs {
   private readonly notion: Client;
 
@@ -29,17 +33,29 @@ export class NotionDocs {
     this.notion = new Client({ auth: opts.auth });
   }
 
-  async ensureRepoPage(parentPageId: string, title: string): Promise<NotionPageRef> {
-    return this.ensureChildPage(parentPageId, title);
+  async ensureRepoPage(parentPageId: string, title: string, icon?: string): Promise<NotionPageRef> {
+    return this.ensureChildPage(parentPageId, title, icon);
   }
 
-  async upsertFolderPage(repoPageId: string, folderTitle: string, markdown: string): Promise<NotionPageRef> {
-    return this.upsertMarkdownPage(repoPageId, folderTitle, markdown);
+  async upsertFolderPage(
+    repoPageId: string,
+    folderTitle: string,
+    markdown: string,
+    icon?: string,
+  ): Promise<NotionPageRef> {
+    return this.upsertMarkdownPage(repoPageId, folderTitle, markdown, icon);
   }
 
-  async upsertMarkdownPage(parentPageId: string, title: string, markdown: string): Promise<NotionPageRef> {
-    const page = await this.ensureChildPage(parentPageId, title);
-    await this.clearBlockChildren(page.id);
+  async upsertMarkdownPage(
+    parentPageId: string,
+    title: string,
+    markdown: string,
+    icon?: string,
+  ): Promise<NotionPageRef> {
+    const page = await this.ensureChildPage(parentPageId, title, icon);
+    // Preserve nested child pages so re-running keeps the documentation tree;
+    // only the prose content of this page is refreshed.
+    await this.clearContentBlocks(page.id);
     await this.appendMarkdown(page.id, markdown);
     return page;
   }
@@ -48,14 +64,22 @@ export class NotionDocs {
     return markdownToBlocks(markdown) as NotionBlock[];
   }
 
-  private async ensureChildPage(parentPageId: string, title: string): Promise<NotionPageRef> {
+  private async ensureChildPage(
+    parentPageId: string,
+    title: string,
+    icon?: string,
+  ): Promise<NotionPageRef> {
     const existing = await this.findChildPage(parentPageId, title);
     if (existing) {
+      if (icon) {
+        await this.notion.pages.update({ page_id: existing.id, icon: emojiIcon(icon) });
+      }
       return { id: existing.id, title, created: false };
     }
 
     const created = await this.notion.pages.create({
       parent: { page_id: parentPageId },
+      icon: emojiIcon(icon),
       properties: {
         title: {
           title: [{ type: "text", text: { content: title } }],
@@ -77,13 +101,15 @@ export class NotionDocs {
     return null;
   }
 
-  private async clearBlockChildren(blockId: string): Promise<void> {
+  /** Delete this page's content blocks but keep nested child pages intact. */
+  private async clearContentBlocks(blockId: string): Promise<void> {
     const children: ListedBlock[] = [];
     for await (const block of this.listBlockChildren(blockId)) {
       children.push(block);
     }
 
     for (const block of children) {
+      if (this.isChildPageBlock(block)) continue;
       await this.notion.blocks.delete({ block_id: block.id });
     }
   }

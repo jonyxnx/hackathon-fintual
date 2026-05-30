@@ -5,10 +5,17 @@ import process from "node:process";
 import simpleGit from "simple-git";
 import { RepoContext } from "../lib/core/context";
 import { changedTopDirs } from "../lib/core/diff";
-import { generateAgentsDoc, generateFolderAgentsDoc } from "../lib/core/generators/agent";
+import {
+  generateAgentsDoc,
+  generateFolderAgentsDoc,
+  type DocManifest,
+  type DocManifestEntry,
+} from "../lib/core/generators/agent";
 import { folderGenerator } from "../lib/core/generators/folder";
-import { getLLM, type ProviderName } from "../lib/core/llm";
-import { createNotionDocsFromEnv } from "../lib/core/notion";
+import { generateFileDoc, isDocumentableFile } from "../lib/core/generators/file";
+import { AGENTS_ICON, REPO_ICON, iconForFile, iconForPath } from "../lib/core/icons";
+import { getLLM, type LLMProvider, type ProviderName } from "../lib/core/llm";
+import { createNotionDocsFromEnv, type NotionDocs } from "../lib/core/notion";
 
 interface CliOptions {
   dir: string;
@@ -19,7 +26,10 @@ interface CliOptions {
   provider?: ProviderName;
   all: boolean;
   dryRun: boolean;
+  maxFiles: number;
 }
+
+const DEFAULT_MAX_FILES = 300;
 
 function usage(): string {
   return `Usage: kitdoc [options]
@@ -31,7 +41,8 @@ Options:
   --owner <owner>    Repository owner (default: parsed from origin remote)
   --repo <repo>      Repository name (default: parsed from origin remote)
   --provider <name>  LLM provider: anthropic or openai
-  --all              Generate docs for all top-level folders
+  --all              Document the whole repository (every folder and file)
+  --max-files <n>    Max number of per-file doc pages (default: ${DEFAULT_MAX_FILES})
   --dry-run          Print generated markdown instead of syncing to Notion
   --help             Show this help message`;
 }
@@ -54,6 +65,7 @@ function parseArgs(argv: string[]): CliOptions {
     dir: process.cwd(),
     all: false,
     dryRun: false,
+    maxFiles: DEFAULT_MAX_FILES,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -86,6 +98,16 @@ function parseArgs(argv: string[]): CliOptions {
       case "--all":
         opts.all = true;
         break;
+      case "--max-files": {
+        const raw = readValue(argv, i, arg);
+        const parsed = Number.parseInt(raw, 10);
+        if (!Number.isFinite(parsed) || parsed < 0) {
+          throw new Error(`--max-files requires a non-negative integer, got: ${raw}`);
+        }
+        opts.maxFiles = parsed;
+        i++;
+        break;
+      }
       case "--dry-run":
         opts.dryRun = true;
         break;
@@ -131,6 +153,105 @@ function printDryRun(folder: string, markdown: string): void {
   console.log(`\n--- end ${folder} ---`);
 }
 
+interface DirNode {
+  path: string;
+  name: string;
+  dirs: Map<string, DirNode>;
+  files: string[];
+}
+
+function buildTree(files: string[], roots?: string[]): DirNode {
+  const root: DirNode = { path: "", name: "", dirs: new Map(), files: [] };
+  for (const file of files) {
+    if (roots && !roots.some((r) => file === r || file.startsWith(`${r}/`))) continue;
+    const parts = file.split("/");
+    let node = root;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const seg = parts[i];
+      const childPath = node.path ? `${node.path}/${seg}` : seg;
+      let child = node.dirs.get(seg);
+      if (!child) {
+        child = { path: childPath, name: seg, dirs: new Map(), files: [] };
+        node.dirs.set(seg, child);
+      }
+      node = child;
+    }
+    node.files.push(file);
+  }
+  return root;
+}
+
+/** Abstracts writing a page so the same walk drives both Notion and --dry-run. */
+interface DocSink {
+  upsert(parentId: string, title: string, markdown: string, icon: string, label: string): Promise<string>;
+}
+
+class NotionSink implements DocSink {
+  constructor(private readonly notion: NotionDocs) {}
+
+  async upsert(parentId: string, title: string, markdown: string, icon: string, label: string): Promise<string> {
+    const page = await this.notion.upsertMarkdownPage(parentId, title, markdown, icon);
+    console.log(`${page.created ? "Created" : "Updated"} ${label} (${icon}).`);
+    return page.id;
+  }
+}
+
+class DryRunSink implements DocSink {
+  async upsert(_parentId: string, _title: string, markdown: string, icon: string, label: string): Promise<string> {
+    printDryRun(`${icon} ${label}`, markdown);
+    return "";
+  }
+}
+
+interface WalkState {
+  ctx: RepoContext;
+  llm: LLMProvider;
+  sink: DocSink;
+  manifest: DocManifest;
+  remainingFiles: number;
+}
+
+async function documentFolder(node: DirNode, parentPageId: string, state: WalkState): Promise<void> {
+  const { ctx, llm, sink } = state;
+  const icon = iconForPath(node.path);
+
+  console.log(`Generating folder doc: ${node.path}`);
+  const folderDoc = await folderGenerator(node.path).run(ctx, llm);
+  const folderPageId = await sink.upsert(parentPageId, node.name, folderDoc.content, icon, node.path);
+  state.manifest.documented.push({ path: node.path, kind: "folder" });
+
+  const folderAgents = await generateFolderAgentsDoc(node.path, ctx, llm);
+  await sink.upsert(folderPageId, "AGENTS.md", folderAgents.content, AGENTS_ICON, `${node.path}/AGENTS.md`);
+
+  await documentFilesAndSubdirs(node, folderPageId, state);
+}
+
+async function documentFilesAndSubdirs(node: DirNode, pageId: string, state: WalkState): Promise<void> {
+  const { ctx, llm, sink } = state;
+
+  for (const file of node.files.sort()) {
+    if (!isDocumentableFile(file)) {
+      state.manifest.skipped.push(file);
+      continue;
+    }
+    if (state.remainingFiles <= 0) {
+      state.manifest.skipped.push(file);
+      continue;
+    }
+    state.remainingFiles -= 1;
+
+    console.log(`Generating file doc: ${file}`);
+    const fileDoc = await generateFileDoc(file, ctx, llm);
+    const title = file.split("/").pop() ?? file;
+    await sink.upsert(pageId, title, fileDoc.content, iconForFile(file), file);
+    state.manifest.documented.push({ path: file, kind: "file" });
+  }
+
+  for (const child of [...node.dirs.values()].sort((a, b) => a.name.localeCompare(b.name))) {
+    await documentFolder(child, pageId, state);
+  }
+}
+
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
   const dir = path.resolve(opts.dir);
@@ -144,61 +265,56 @@ async function main(): Promise<void> {
     ref: opts.head ?? "HEAD",
   });
 
-  const folders = opts.all ? ctx.topDirs() : await changedTopDirs(dir, opts.base, opts.head);
+  const changedRoots = opts.all ? null : await changedTopDirs(dir, opts.base, opts.head);
   const llm = getLLM(opts.provider);
   const notionTarget = opts.dryRun ? null : createNotionDocsFromEnv();
   const repoPage = notionTarget
-    ? await notionTarget.notion.ensureRepoPage(notionTarget.parentPageId, `${identity.owner}/${identity.repo}`)
+    ? await notionTarget.notion.ensureRepoPage(
+        notionTarget.parentPageId,
+        `${identity.owner}/${identity.repo}`,
+        REPO_ICON,
+      )
     : null;
 
-  console.log("Generating AGENTS.md...");
-  const agentsDoc = await generateAgentsDoc(ctx, llm);
-  if (opts.dryRun) {
-    printDryRun("AGENTS.md", agentsDoc.content);
+  if (!opts.dryRun && (!notionTarget || !repoPage)) {
+    throw new Error("Notion target was not initialized.");
+  }
+
+  const repoPageId = repoPage?.id ?? "";
+  const sink: DocSink = notionTarget ? new NotionSink(notionTarget.notion) : new DryRunSink();
+
+  const state: WalkState = {
+    ctx,
+    llm,
+    sink,
+    manifest: { documented: [], skipped: [] },
+    remainingFiles: opts.maxFiles,
+  };
+
+  // For --all, document the whole repo (every folder + file, including root files).
+  // For changed mode, restrict to the changed top-level folders.
+  const tree = buildTree(ctx.fileTree, changedRoots ?? undefined);
+  const hasContent = tree.files.length > 0 || tree.dirs.size > 0;
+
+  if (!hasContent) {
+    console.log("No files or folders to document.");
   } else {
-    if (!notionTarget || !repoPage) {
-      throw new Error("Notion target was not initialized.");
-    }
-
-    const page = await notionTarget.notion.upsertMarkdownPage(repoPage.id, "AGENTS.md", agentsDoc.content);
-    console.log(`${page.created ? "Created" : "Updated"} Notion page for AGENTS.md.`);
+    const scope = opts.all ? "whole repository" : `changed folders: ${(changedRoots ?? []).join(", ")}`;
+    console.log(`Documenting ${scope} (every folder and file, page-in-page).`);
+    await documentFilesAndSubdirs(tree, repoPageId, state);
   }
 
-  if (folders.length === 0) {
-    console.log("No top-level folders to document.");
-    return;
-  }
+  // AGENTS.md is generated LAST so it can index everything that was produced and
+  // report on coverage and gaps.
+  console.log("Generating AGENTS.md (documentation index + coverage)...");
+  const agentsDoc = await generateAgentsDoc(ctx, llm, state.manifest);
+  await sink.upsert(repoPageId, "AGENTS.md", agentsDoc.content, AGENTS_ICON, "AGENTS.md");
 
-  console.log(`Generating docs for ${folders.length} folder(s): ${folders.join(", ")}`);
-
-  for (const folder of folders) {
-    console.log(`Generating ${folder}...`);
-    const result = await folderGenerator(folder).run(ctx, llm);
-    console.log(`Generating AGENTS.md for ${folder}...`);
-    const folderAgentsDoc = await generateFolderAgentsDoc(folder, ctx, llm);
-
-    if (opts.dryRun) {
-      printDryRun(folder, result.content);
-      printDryRun(`${folder}/AGENTS.md`, folderAgentsDoc.content);
-      continue;
-    }
-
-    if (!notionTarget || !repoPage) {
-      throw new Error("Notion target was not initialized.");
-    }
-
-    const page = await notionTarget.notion.upsertFolderPage(repoPage.id, folder, result.content);
-    console.log(`${page.created ? "Created" : "Updated"} Notion page for ${folder}.`);
-
-    const agentsPage = await notionTarget.notion.upsertMarkdownPage(
-      page.id,
-      "AGENTS.md",
-      folderAgentsDoc.content,
-    );
-    console.log(
-      `${agentsPage.created ? "Created" : "Updated"} Notion page for ${folder}/AGENTS.md.`,
-    );
-  }
+  const docCount = state.manifest.documented.length;
+  const fileCount = state.manifest.documented.filter((e: DocManifestEntry) => e.kind === "file").length;
+  console.log(
+    `Done. Documented ${docCount} pages (${fileCount} files), skipped ${state.manifest.skipped.length} files.`,
+  );
 }
 
 main().catch((err) => {

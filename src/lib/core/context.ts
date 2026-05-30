@@ -155,6 +155,29 @@ export class RepoContext {
     return [...set].sort();
   }
 
+  /**
+   * Every directory that contains at least one file, including nested ones.
+   * Used to document the whole repository, not just top-level folders.
+   */
+  allDirs(maxDepth = 4): string[] {
+    const set = new Set<string>();
+    for (const f of this.fileTree) {
+      const parts = f.split("/");
+      // Drop the filename; walk every ancestor directory up to maxDepth.
+      for (let i = 1; i < parts.length && i <= maxDepth; i++) {
+        set.add(parts.slice(0, i).join("/"));
+      }
+    }
+    return [...set].sort();
+  }
+
+  filesInDir(dir: string): string[] {
+    const normalized = dir.replace(/^\/+|\/+$/g, "");
+    return this.fileTree
+      .filter((file) => file === normalized || file.startsWith(`${normalized}/`))
+      .sort();
+  }
+
   fileTreePreview(maxEntries = 200): string {
     const list = this.fileTree.slice(0, maxEntries);
     const more = this.fileTree.length - list.length;
