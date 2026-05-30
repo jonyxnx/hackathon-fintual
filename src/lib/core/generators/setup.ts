@@ -55,8 +55,7 @@ Produce comprehensive internal onboarding documentation. Cover every subsection 
 5. \`## Run locally\` — dev server, worker, CLI, or container commands grounded in scripts and manifests.
 6. \`## First-change workflow\` — recommended sequence: install, configure env, run, make a small change, verify.
 7. \`## Useful scripts\` — what important scripts do and when to use each.
-8. \`## Troubleshooting\` — likely setup issues visible from the repo and how to diagnose them.
-9. \`## Agent notes\` — what a coding agent should verify before making changes in an unfamiliar checkout.`;
+8. \`## Troubleshooting\` — likely setup issues visible from the repo and how to diagnose them.`;
 
     const content = await llm.complete({ system: SYSTEM_PROMPT, user, maxTokens: 4500 });
     return { filename: "setup.md", content, signals };

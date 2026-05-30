@@ -1,6 +1,21 @@
 import type { RepoContext } from "../context";
 import type { LLMProvider } from "../llm";
-import { SYSTEM_PROMPT, buildFileBlocks, type GeneratorResult } from "./index";
+import { buildFileBlocks, type GeneratorResult } from "./index";
+
+/**
+ * AGENTS.md is the one document written FOR AI coding agents (not human
+ * onboarding). It tells an agent what matters, where to look, how to navigate
+ * the rest of the docs, and how to change the repo safely.
+ */
+const AGENT_SYSTEM_PROMPT = `You are writing AGENTS.md: operating instructions for an AI coding agent working in this repository.
+Rules:
+- Your reader is an autonomous coding agent, not a human doing onboarding. Optimize for fast orientation and safe, correct edits.
+- Write ONLY what is supported by the provided files. If something is unknown or absent, say so explicitly. Never invent commands, paths, versions, or behavior.
+- Be dense and high-signal: prioritize what an agent must know before touching code (entry points, key files, conventions, hazards, verification commands).
+- Tell the agent which files to open first for each kind of task, what NOT to break, and how to verify a change.
+- This file is also the index for the human-facing documentation tree, so explain what other docs exist and when the agent should read them instead of re-deriving context.
+- Output GitHub-flavored markdown. No preamble. Start with the requested heading.
+- Use flat bullet lists and tables; reference files with backticks and repo-relative paths.`;
 
 const AGENT_CONTEXT_PATTERNS = [
   "**/README.md",
@@ -27,24 +42,40 @@ export interface DocManifestEntry {
   /** Repo-relative path of the documented file or folder. */
   path: string;
   kind: "folder" | "file";
+  /** Emoji icon set on the Notion page for this entry. */
+  icon?: string;
+}
+
+export interface RootDocEntry {
+  title: string;
+  icon: string;
 }
 
 export interface DocManifest {
   documented: DocManifestEntry[];
   /** Folders considered too small for their own page (folded into a parent doc). */
   skipped: string[];
+  /** Root-level documents on the repo page (Local setup, Deployment, Codebase patterns, Improvements). */
+  rootDocs: RootDocEntry[];
+  /** True when the whole repo was documented; false for an incremental (changed-only) run. */
+  fullRun: boolean;
 }
 
 function manifestSection(manifest: DocManifest): string {
-  const folders = manifest.documented.filter((e) => e.kind === "folder").map((e) => e.path);
+  const folders = manifest.documented.filter((e) => e.kind === "folder");
   const lines = [
-    `Documentation pages already generated in Notion for this run (one doc per significant folder, nested page-in-page):`,
+    `Run type: ${manifest.fullRun ? "FULL — entire codebase documented" : "INCREMENTAL — only changed areas refreshed"}`,
     ``,
-    `- Folder pages (${folders.length}):`,
-    ...folders.slice(0, 300).map((f) => `  - \`${f}\``),
+    `Each documented page below already has the shown emoji icon set in Notion. When you build the documentation index and folder guide, prefix each page name with its emoji so this AGENTS.md mirrors the Notion sidebar.`,
+    ``,
+    `Root-level documents on the repo page (${manifest.rootDocs.length}):`,
+    ...manifest.rootDocs.map((d) => `  - ${d.icon} \`${d.title}\``),
+    ``,
+    `Folder documentation pages this run (one doc per significant folder, nested page-in-page) (${folders.length}):`,
+    ...folders.slice(0, 300).map((f) => `  - ${f.icon ?? "📁"} \`${f.path}\``),
     folders.length > 300 ? `  - ... (${folders.length - 300} more)` : "",
     ``,
-    `- Small folders folded into a parent doc instead of their own page (${manifest.skipped.length}):`,
+    `Small folders folded into a parent doc instead of their own page (${manifest.skipped.length}):`,
     ...manifest.skipped.slice(0, 150).map((f) => `  - \`${f}\``),
     manifest.skipped.length > 150 ? `  - ... (${manifest.skipped.length - 150} more)` : "",
   ];
@@ -68,8 +99,8 @@ export async function generateAgentsDoc(
 
   const coverageSections = manifest
     ? `
-9. \`## Documentation index\` - explain how the Notion documentation tree is organized (repo page → nested folder pages, one doc per significant folder; small folders are folded into their parent's doc) and how a developer should navigate it.
-10. \`## Documentation coverage\` - based on the coverage data above, summarize which folders are documented and which were folded in, and call out any large or multi-concern folder whose doc should be expanded or split.
+9. \`## Documentation index\` - explain how the Notion documentation tree is organized: the repo page holds root-level docs (Local setup, Deployment, Codebase patterns, Improvements, this AGENTS.md) plus nested folder pages (one doc per significant folder; small folders are folded into their parent's doc). Render this as a list where every page name is prefixed with the exact emoji icon shown in the coverage data above so it matches the Notion sidebar. Explain how a developer should navigate it, and note that the first run documents everything while later runs refresh only changed areas.
+10. \`## Documentation coverage\` - based on the coverage data above, summarize which root docs and folders are documented and which were folded in, and call out any large or multi-concern folder whose doc should be expanded or split.
 11. \`## Gaps and recommended additions\` - list specific folders or topics that still need documentation or deeper coverage, and what each doc should contain. This is the "what's missing, add it" section.
 12. \`## CI and automation\` - GitHub Actions / Notion sync / deploy hooks when visible.
 13. \`## Change safety checklist\` - checks before handing off changes.
@@ -81,7 +112,7 @@ export async function generateAgentsDoc(
 
   const user = `Write a root **AGENTS.md** file for \`${ctx.owner}/${ctx.repo}\`.
 
-This document lives on the Notion repo page. It is BOTH the primary operating guide for coding agents/new developers AND the index for the documentation tree generated alongside it. It must help someone work fast without reading the entire repository, and it must describe what documentation already exists and what is still missing.
+This document lives on the Notion repo page and is written specifically FOR an AI coding agent (the human-facing docs are separate root pages: Local setup, Deployment, Codebase patterns, Improvements, plus the per-folder pages). It is BOTH the primary operating guide for an agent AND the index for that documentation tree. It must let an agent work fast and safely without reading the entire repository, and it must describe what documentation already exists and what is still missing.
 
 Repo ref: ${ctx.ref}
 Top-level directories: ${topDirs.join(", ") || "(none)"}
@@ -108,7 +139,7 @@ Produce:
 7. \`## Folder guide\` - one short bullet per top-level folder: purpose, key files, and what kind of changes belong there.
 8. \`## Coding rules\` - conventions and safety rules grounded in the files.${coverageSections}`;
 
-  const content = await llm.complete({ system: SYSTEM_PROMPT, user, maxTokens: 7000 });
+  const content = await llm.complete({ system: AGENT_SYSTEM_PROMPT, user, maxTokens: 7000 });
   return { filename: "AGENTS.md", content, signals: paths };
 }
 

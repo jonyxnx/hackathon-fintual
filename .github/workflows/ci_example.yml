@@ -62,8 +62,10 @@ jobs:
           llm-provider: openai # anthropic
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
 
-          # Document every folder in the repo, not just the ones changed in this push.
-          document-all: "true"
+          # Let kitdoc decide: it documents the whole repo on the first run (no
+          # AGENTS.md on the Notion page yet) and only refreshes changed areas
+          # afterwards. Set this to "true" to force a full re-documentation.
+          document-all: "false"
 
           # Notion destination.
           notion-token: ${{ secrets.NOTION_TOKEN }}

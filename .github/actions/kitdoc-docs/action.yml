@@ -1,5 +1,5 @@
 name: Kitdoc Notion Docs
-description: Generate repo AGENTS.md plus changed-folder documentation (each with nested AGENTS.md) and sync it to Notion.
+description: Generate root docs (local setup, deployment, codebase patterns, improvements, AGENTS.md) plus nested per-folder docs and sync them to Notion. Documents the whole repo on the first run, then only changed areas.
 
 inputs:
   target-repository:
@@ -51,7 +51,7 @@ inputs:
     description: OpenAI API key, required when llm-provider is openai.
     required: false
   document-all:
-    description: Document every folder in the repository instead of only the folders changed between base and head.
+    description: Force a full re-documentation of every folder. When false, kitdoc documents the whole repo on the first run (no AGENTS.md on the Notion page yet) and only the changed folders afterwards.
     required: false
     default: "false"
 

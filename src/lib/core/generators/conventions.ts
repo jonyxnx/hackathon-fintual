@@ -57,10 +57,9 @@ Produce comprehensive internal engineering guidance. Cover every subsection belo
 3. \`## Formatting\` — indentation, quotes, semicolons, trailing commas, import style, naming, and component/function style.
 4. \`## Language / compiler settings\` — TypeScript strict flags, Python version, lint targets, etc. (only what's visible).
 5. \`## Code patterns observed\` — module boundaries, component/function style, error handling, async/data flow, naming, and file organization.
-6. \`## Conventions to follow\` — actionable bullets for a new developer or coding agent making changes in this repo.
-7. \`## Review checklist\` — concrete checks a reviewer or coding agent should apply before handing off changes.
-8. \`## Things to avoid\` — risky changes or style mismatches that would conflict with the observed codebase.
-9. \`## Agent notes\` — how a coding agent should match existing style when editing unfamiliar files.`;
+6. \`## Conventions to follow\` — actionable bullets for a new developer making changes in this repo.
+7. \`## Review checklist\` — concrete checks a reviewer should apply before approving changes.
+8. \`## Things to avoid\` — risky changes or style mismatches that would conflict with the observed codebase.`;
 
     const content = await llm.complete({ system: SYSTEM_PROMPT, user, maxTokens: 5000 });
     return { filename: "conventions.md", content, signals };

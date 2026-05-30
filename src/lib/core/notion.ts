@@ -60,8 +60,32 @@ export class NotionDocs {
     return page;
   }
 
+  /**
+   * Ensure a child page exists (creating it if needed) and set its icon, without
+   * touching its content. Callers can create nested subpages before writing the
+   * parent's prose so subpages render above the text instead of at the bottom.
+   */
+  async ensurePage(parentPageId: string, title: string, icon?: string): Promise<NotionPageRef> {
+    return this.ensureChildPage(parentPageId, title, icon);
+  }
+
+  /**
+   * Refresh a page's prose: delete existing content blocks (keeping nested child
+   * pages) and append the markdown. Because the markdown is appended after the
+   * preserved child pages, subpages stay at the top of the page.
+   */
+  async writeMarkdown(pageId: string, markdown: string): Promise<void> {
+    await this.clearContentBlocks(pageId);
+    await this.appendMarkdown(pageId, markdown);
+  }
+
   markdownToNotionBlocks(markdown: string): NotionBlock[] {
     return markdownToBlocks(markdown) as NotionBlock[];
+  }
+
+  /** True if a child page with the given title already exists under the parent. */
+  async childPageExists(parentPageId: string, title: string): Promise<boolean> {
+    return (await this.findChildPage(parentPageId, title)) !== null;
   }
 
   private async ensureChildPage(

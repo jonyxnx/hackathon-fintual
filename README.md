@@ -43,11 +43,12 @@ This repo includes a reusable GitHub Action that documents a repository and sync
 
 For each run it creates a repo page and, beneath it, a page-in-page hierarchy that mirrors the codebase:
 
+- Root-level whole-codebase docs written directly on the repo page: **Local setup** (how to set the project up locally, if it can be), **Deployment** (how to deploy, if it is deployable), **Codebase patterns** (conventions and patterns), and **Improvements** (a living, ranked backlog of things to improve). These are regenerated on every run so they stay current.
 - One doc per folder, but only for folders substantial enough to warrant it (a usage-based emoji icon is set per folder). Small folders are folded into their nearest documented parent's doc.
 - Large or multi-concern folders get a deeper doc that breaks the folder down by concern.
-- A root `AGENTS.md` that acts as the documentation index and coverage report: it lists which folders were documented, which were folded in, and recommends what is still missing or should be expanded.
+- A root `AGENTS.md` that acts as the documentation index and coverage report: it lists which root docs and folders were documented, which were folded in, and recommends what is still missing or should be expanded.
 
-Pull-request runs document the changed top-level folders; the self-doc workflow uses `document-all: "true"` to document the entire repository.
+Kitdoc decides its scope automatically: the **first run** in a repo (no `AGENTS.md` on the Notion repo page yet) documents the **entire codebase**; **subsequent runs** only refresh the root docs plus the folders that changed between `--base` and `--head`. Pass `--all` (or `document-all: "true"` in the action) to force a full re-documentation.
 
 Required repository secrets:
 
@@ -95,4 +96,4 @@ jobs:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
 ```
 
-The action checks out the target repository with full git history, checks out the kitdoc repository separately, runs `npm ci` for kitdoc, and runs the CLI against the target checkout. It documents each significant folder as a nested page, then generates the root `AGENTS.md` index + coverage report last so it can reflect everything that was produced. The folder-significance threshold is controlled by `--min-folder-files` (default 3).
+The action checks out the target repository with full git history, checks out the kitdoc repository separately, runs `npm ci` for kitdoc, and runs the CLI against the target checkout. It first writes the root docs (local setup, deployment, codebase patterns, improvements), then documents each significant folder as a nested page, and finally generates the root `AGENTS.md` index + coverage report last so it can reflect everything that was produced. On the first run it documents the whole repo; afterwards it only refreshes changed folders (detected from `base-sha`/`head-sha`). The folder-significance threshold is controlled by `--min-folder-files` (default 3).

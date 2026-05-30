@@ -60,7 +60,7 @@ Produce comprehensive internal deployment and operations guidance. Cover every s
 5. \`## Environment variables\` — env vars referenced in configs, grouped by purpose when possible; do not invent values.
 6. \`## How to deploy\` — concrete steps a company developer would follow, grounded in the above.
 7. \`## Operational notes\` — risks, external services, secrets, migrations, or manual steps visible from configs.
-8. \`## Agent checklist\` — what a coding agent should inspect before changing deployment or CI files.`;
+8. \`## Before changing deploy/CI\` — what a developer should inspect and verify before editing deployment or CI files.`;
 
     const content = await llm.complete({ system: SYSTEM_PROMPT, user, maxTokens: 4500 });
     return { filename: "deployment.md", content, signals };

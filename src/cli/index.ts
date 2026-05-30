@@ -11,6 +11,11 @@ import {
 } from "../lib/core/generators/agent";
 import { folderGenerator } from "../lib/core/generators/folder";
 import { isDocumentableFile } from "../lib/core/generators/file";
+import { setup } from "../lib/core/generators/setup";
+import { deployment } from "../lib/core/generators/deployment";
+import { conventions } from "../lib/core/generators/conventions";
+import { improvements } from "../lib/core/generators/improvements";
+import type { Generator } from "../lib/core/generators";
 import { AGENTS_ICON, REPO_ICON, iconForPath } from "../lib/core/icons";
 import { getLLM, type LLMProvider, type ProviderName } from "../lib/core/llm";
 import { createNotionDocsFromEnv, type NotionDocs } from "../lib/core/notion";
@@ -32,6 +37,20 @@ const DEFAULT_MIN_FOLDER_FILES = 3;
 /** A folder this large (or with this many subfolders) gets a deeper, concern-split doc. */
 const BIG_FOLDER_FILES = 12;
 const BIG_FOLDER_SUBDIRS = 4;
+
+/**
+ * Root-level documents written directly on the repo page. Regenerated on every
+ * run (full or incremental) so whole-codebase docs stay current.
+ */
+const ROOT_DOCS: Array<{ gen: Generator; title: string; icon: string }> = [
+  { gen: setup, title: "Local setup", icon: "🧰" },
+  { gen: deployment, title: "Deployment", icon: "🚀" },
+  { gen: conventions, title: "Codebase patterns", icon: "📐" },
+  { gen: improvements, title: "Improvements", icon: "✨" },
+];
+
+/** Marker page whose presence on the repo page means the repo was documented before. */
+const AGENTS_PAGE_TITLE = "AGENTS.md";
 
 function usage(): string {
   return `Usage: kitdoc [options]
@@ -142,13 +161,6 @@ async function defaultRepoIdentity(dir: string): Promise<{ owner: string; repo: 
   return parsed;
 }
 
-function assertDiffArgs(opts: CliOptions): asserts opts is CliOptions & { base: string; head: string } {
-  if (opts.all) return;
-  if (!opts.base || !opts.head) {
-    throw new Error("--base and --head are required unless --all is set.");
-  }
-}
-
 function printDryRun(folder: string, markdown: string): void {
   console.log(`\n--- kitdoc dry-run: ${folder} ---\n`);
   console.log(markdown);
@@ -183,26 +195,54 @@ function buildTree(files: string[], roots?: string[]): DirNode {
   return root;
 }
 
-/** Abstracts writing a page so the same walk drives both Notion and --dry-run. */
+/**
+ * Abstracts page writing so the same walk drives both Notion and --dry-run.
+ * It is two-phase on purpose: `ensure` creates the page (so nested subpages can
+ * be created under it first), and `write` fills in the prose afterwards. Because
+ * subpages exist before the prose is written, they render at the TOP of the page
+ * instead of below all the documentation text.
+ */
 interface DocSink {
-  upsert(parentId: string, title: string, markdown: string, icon: string, label: string): Promise<string>;
+  ensure(parentId: string, title: string, icon: string, label: string): Promise<string>;
+  write(pageId: string, markdown: string, icon: string, label: string): Promise<void>;
 }
 
 class NotionSink implements DocSink {
   constructor(private readonly notion: NotionDocs) {}
 
-  async upsert(parentId: string, title: string, markdown: string, icon: string, label: string): Promise<string> {
-    const page = await this.notion.upsertMarkdownPage(parentId, title, markdown, icon);
+  async ensure(parentId: string, title: string, icon: string, label: string): Promise<string> {
+    const page = await this.notion.ensurePage(parentId, title, icon);
     console.log(`${page.created ? "Created" : "Updated"} ${label} (${icon}).`);
     return page.id;
+  }
+
+  async write(pageId: string, markdown: string, _icon: string, _label: string): Promise<void> {
+    await this.notion.writeMarkdown(pageId, markdown);
   }
 }
 
 class DryRunSink implements DocSink {
-  async upsert(_parentId: string, _title: string, markdown: string, icon: string, label: string): Promise<string> {
-    printDryRun(`${icon} ${label}`, markdown);
+  async ensure(_parentId: string, _title: string, _icon: string, _label: string): Promise<string> {
     return "";
   }
+
+  async write(_pageId: string, markdown: string, icon: string, label: string): Promise<void> {
+    printDryRun(`${icon} ${label}`, markdown);
+  }
+}
+
+/** Create a leaf doc page and write its content in one step. */
+async function writeDoc(
+  state: WalkState,
+  parentId: string,
+  title: string,
+  markdown: string,
+  icon: string,
+  label: string,
+): Promise<string> {
+  const pageId = await state.sink.ensure(parentId, title, icon, label);
+  await state.sink.write(pageId, markdown, icon, label);
+  return pageId;
 }
 
 interface WalkState {
@@ -211,6 +251,30 @@ interface WalkState {
   sink: DocSink;
   manifest: DocManifest;
   minFolderFiles: number;
+}
+
+/**
+ * Decide whether to document the whole codebase (first run) or only changed
+ * areas (incremental). First run is detected by the absence of the AGENTS.md
+ * page on the Notion repo page.
+ */
+async function resolveFullRun(
+  opts: CliOptions,
+  notion: NotionDocs | null,
+  repoPageId: string,
+): Promise<boolean> {
+  if (opts.all) return true;
+  if (notion && repoPageId) {
+    const documentedBefore = await notion.childPageExists(repoPageId, AGENTS_PAGE_TITLE);
+    console.log(
+      documentedBefore
+        ? `Found ${AGENTS_PAGE_TITLE} on the repo page → incremental run (changed areas only).`
+        : `No ${AGENTS_PAGE_TITLE} on the repo page → first run, documenting the entire codebase.`,
+    );
+    return !documentedBefore;
+  }
+  // Dry-run: full unless base/head were provided (then mimic an incremental run).
+  return !(opts.base && opts.head);
 }
 
 function countDocumentableFiles(node: DirNode): number {
@@ -244,12 +308,18 @@ async function documentChildren(node: DirNode, parentPageId: string, state: Walk
 
     const deep = isBig(child);
     const icon = iconForPath(child.path);
+
+    // 1. Ensure the page exists so subpages can be created under it.
+    const folderPageId = await state.sink.ensure(parentPageId, child.name, icon, child.path);
+    state.manifest.documented.push({ path: child.path, kind: "folder", icon });
+
+    // 2. Create nested subpages FIRST so they render above this page's prose.
+    await documentChildren(child, folderPageId, state);
+
+    // 3. Write this folder's prose LAST so it lands below the subpages.
     console.log(`Generating folder doc: ${child.path}${deep ? " (deep)" : ""}`);
     const folderDoc = await folderGenerator(child.path, { deep }).run(state.ctx, state.llm);
-    const folderPageId = await state.sink.upsert(parentPageId, child.name, folderDoc.content, icon, child.path);
-    state.manifest.documented.push({ path: child.path, kind: "folder" });
-
-    await documentChildren(child, folderPageId, state);
+    await state.sink.write(folderPageId, folderDoc.content, icon, child.path);
   }
 }
 
@@ -258,15 +328,12 @@ async function main(): Promise<void> {
   const dir = path.resolve(opts.dir);
   const identity = opts.owner && opts.repo ? { owner: opts.owner, repo: opts.repo } : await defaultRepoIdentity(dir);
 
-  assertDiffArgs(opts);
-
   const ctx = await RepoContext.fromLocalDir(dir, {
     owner: identity.owner,
     repo: identity.repo,
     ref: opts.head ?? "HEAD",
   });
 
-  const changedRoots = opts.all ? null : await changedTopDirs(dir, opts.base, opts.head);
   const llm = getLLM(opts.provider);
   const notionTarget = opts.dryRun ? null : createNotionDocsFromEnv();
   const repoPage = notionTarget
@@ -284,35 +351,64 @@ async function main(): Promise<void> {
   const repoPageId = repoPage?.id ?? "";
   const sink: DocSink = notionTarget ? new NotionSink(notionTarget.notion) : new DryRunSink();
 
+  // First run documents everything; subsequent runs only refresh changed areas.
+  const fullRun = await resolveFullRun(opts, notionTarget?.notion ?? null, repoPageId);
+
+  let changedRoots: string[] | null = null;
+  if (!fullRun) {
+    if (!opts.base || !opts.head) {
+      throw new Error("--base and --head are required for an incremental run (or pass --all to force a full run).");
+    }
+    changedRoots = await changedTopDirs(dir, opts.base, opts.head);
+  }
+
   const state: WalkState = {
     ctx,
     llm,
     sink,
-    manifest: { documented: [], skipped: [] },
+    manifest: { documented: [], skipped: [], rootDocs: [], fullRun },
     minFolderFiles: opts.minFolderFiles,
   };
 
-  // For --all, document the whole repo. For changed mode, restrict to the
-  // changed top-level folders. Each significant folder gets its own nested page;
-  // small folders are folded into their nearest documented ancestor.
+  // Root-level whole-codebase docs (local setup, deployment, patterns,
+  // improvements). Created first so they sit at the TOP of the repo page,
+  // above the per-folder pages. Always regenerated so they stay current.
+  console.log("Generating root documents (local setup, deployment, patterns, improvements)...");
+  for (const { gen, title, icon } of ROOT_DOCS) {
+    console.log(`Generating root doc: ${title}...`);
+    const doc = await gen.run(ctx, llm);
+    await writeDoc(state, repoPageId, title, doc.content, icon, title);
+    state.manifest.rootDocs.push({ title, icon });
+  }
+
+  // Reserve the AGENTS.md page now (before folder pages) so it stays near the
+  // top of the repo page; its content is written last once coverage is known.
+  const agentsPageId = await state.sink.ensure(repoPageId, AGENTS_PAGE_TITLE, AGENTS_ICON, AGENTS_PAGE_TITLE);
+
+  // Folder docs. Full run walks the whole repo; incremental restricts to the
+  // changed top-level folders (and their significant descendants). Each
+  // significant folder gets its own nested page; small folders are folded into
+  // their nearest documented ancestor.
   const tree = buildTree(ctx.fileTree, changedRoots ?? undefined);
 
   if (tree.dirs.size === 0) {
-    console.log("No folders to document.");
+    console.log(fullRun ? "No folders to document." : "No changed folders to document.");
   } else {
-    const scope = opts.all ? "whole repository" : `changed folders: ${(changedRoots ?? []).join(", ")}`;
+    const scope = fullRun ? "whole repository" : `changed folders: ${(changedRoots ?? []).join(", ")}`;
     console.log(`Documenting ${scope} (one doc per significant folder, page-in-page).`);
     await documentChildren(tree, repoPageId, state);
   }
 
-  // AGENTS.md is generated LAST so it can index everything that was produced and
-  // report on coverage and gaps.
+  // AGENTS.md content is written LAST so it can index everything that was
+  // produced and report on coverage and gaps. Its page (reserved above) also
+  // marks the repo as documented, which makes the next run incremental.
   console.log("Generating AGENTS.md (documentation index + coverage)...");
   const agentsDoc = await generateAgentsDoc(ctx, llm, state.manifest);
-  await sink.upsert(repoPageId, "AGENTS.md", agentsDoc.content, AGENTS_ICON, "AGENTS.md");
+  await sink.write(agentsPageId, agentsDoc.content, AGENTS_ICON, AGENTS_PAGE_TITLE);
 
   console.log(
-    `Done. Documented ${state.manifest.documented.length} folder(s), folded ${state.manifest.skipped.length} small folder(s).`,
+    `Done (${fullRun ? "full" : "incremental"} run). ${state.manifest.rootDocs.length} root doc(s), ` +
+      `${state.manifest.documented.length} folder doc(s), folded ${state.manifest.skipped.length} small folder(s).`,
   );
 }
 

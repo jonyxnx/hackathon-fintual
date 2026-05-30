@@ -68,11 +68,12 @@ export async function buildFileBlocks(
   return blocks.join("\n\n");
 }
 
-export const SYSTEM_PROMPT = `You are a precise technical writer creating internal engineering documentation for a real codebase.
+export const SYSTEM_PROMPT = `You are a precise technical writer creating internal engineering documentation for a real codebase. Your reader is a human developer joining the team.
 Rules:
 - Write ONLY what is supported by the provided files. If something is unknown or absent, say so explicitly.
 - Do not invent versions, commands, URLs, or behavior.
-- Optimize for a new company developer or coding agent that needs to work safely in this repo, not for public product marketing or end-user usage.
+- Optimize for a new company developer (a human engineer) who needs to understand and safely change this repo, not for public product marketing or end-user usage.
+- Write for people: clear, practical, and skimmable. Do NOT address AI agents or include "agent" instructions/checklists — that guidance lives in a separate AGENTS.md file.
 - Explain how the repo is put together, where to make changes, what conventions to follow, and what to be careful about.
 - Output GitHub-flavored markdown. No preamble. Start with the requested heading.
 - Keep a consistent style: short paragraphs, flat bullet lists, and predictable section headings.
@@ -90,7 +91,7 @@ export function notDetectedStub(title: string, _looked: string[]): string {
     "",
     "_No clear evidence for this area was detected in the repository._",
     "",
-    "A developer or coding agent should treat this topic as unknown until the repo gains explicit configuration or source files for it.",
+    "Treat this topic as unknown until the repo gains explicit configuration or source files for it.",
     "",
   ].join("\n");
 }

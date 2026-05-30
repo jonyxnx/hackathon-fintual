@@ -134,7 +134,7 @@ Produce internal folder documentation:
 6. \`## Connections\` - imports from and exports to the rest of the repo, plus external libraries used here.
 7. \`## Change map\` - common tasks (add/modify/remove behavior) mapped to the exact files to open first.
 8. \`## Fast lookup\` - which symbols to search and which files to read first for the most common questions about this folder.
-9. \`## Agent notes\` - practical cautions, verification hints, and unknowns that should be checked before editing.${deepSection}`;
+9. \`## Gotchas\` - practical cautions, edge cases, and unknowns a developer should check before editing here.${deepSection}`;
 
       const content = await llm.complete({ system: SYSTEM_PROMPT, user, maxTokens: deep ? 6500 : 4500 });
       return { filename: `${normalizedFolder}.md`, content, signals: sampleFiles };
