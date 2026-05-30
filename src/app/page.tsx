@@ -6,7 +6,7 @@ import { PhaseIndicator } from "@/components/PhaseIndicator";
 import { PixelCat } from "@/components/PixelCat";
 import { MarkdownPreview, type PreviewFile } from "@/components/MarkdownPreview";
 import { DocTree, type DocNavItem } from "@/components/DocTree";
-import type { Phase } from "@/lib/core/orchestrator";
+import type { Phase } from "@/lib/core/webRun";
 
 type UIPhase = Phase | "generating" | "complete" | null;
 type DocStatus = "running" | "done" | "failed";
@@ -19,23 +19,23 @@ interface DocRuntime extends DocNavItem {
 export default function Home() {
   const [running, setRunning] = useState(false);
   const [phase, setPhase] = useState<UIPhase>(null);
-  const [phaseDetail, setPhaseDetail] = useState<string | undefined>(undefined);
   const [target, setTarget] = useState<string | null>(null);
   const [fileTree, setFileTree] = useState<string[]>([]);
   const [docs, setDocs] = useState<Record<string, DocRuntime>>({});
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const [downloadingZip, setDownloadingZip] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   function resetState() {
     setRunning(true);
     setPhase("parsing");
-    setPhaseDetail(undefined);
     setTarget(null);
     setFileTree([]);
     setDocs({});
     setSelectedDocId(null);
     setDownloadUrl(null);
+    setDownloadingZip(false);
     setError(null);
   }
 
@@ -82,7 +82,6 @@ export default function Home() {
     const d = data as Record<string, unknown>;
     if (event === "phase") {
       setPhase(d.phase as Phase);
-      setPhaseDetail(d.detail as string | undefined);
     } else if (event === "repo") {
       setTarget(`${d.owner}/${d.repo}@${d.ref}`);
       setFileTree((d.fileTree as string[]) ?? []);
@@ -117,6 +116,45 @@ export default function Home() {
   }
 
   const docList = useMemo(() => Object.values(docs), [docs]);
+  const doneDocCount = useMemo(() => docList.filter((doc) => doc.status === "done").length, [docList]);
+  const currentDocTitle = useMemo(() => docList.find((doc) => doc.status === "running")?.title, [docList]);
+  const zipName = useMemo(() => (target ? target.split("@")[0].replace("/", "-") : "kitdoc-docs"), [target]);
+
+  async function handleDownloadZip() {
+    if (downloadingZip) return;
+
+    if (downloadUrl) {
+      window.location.href = downloadUrl;
+      return;
+    }
+
+    const files = docList
+      .filter((doc) => doc.status === "done" && doc.content)
+      .map((doc) => ({ filename: doc.filename, content: doc.content! }));
+
+    if (files.length === 0) return;
+
+    setDownloadingZip(true);
+    try {
+      const res = await fetch("/api/zip", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files, name: zipName }),
+      });
+      if (!res.ok) throw new Error("Zip download failed");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${zipName}.zip`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setDownloadingZip(false);
+    }
+  }
   const previewFile = useMemo<PreviewFile | null>(() => {
     const selected = selectedDocId ? docs[selectedDocId] : null;
     if (selected?.status === "failed") {
@@ -157,16 +195,27 @@ export default function Home() {
                 <p className="text-sm text-stone-500">{target ?? "Generating concise repo docs"}</p>
               </div>
             </div>
-            <div className="min-w-0 flex-1">
-              <UrlForm disabled={running} onSubmit={handleSubmit} />
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <div className="min-w-0 flex-1">
+                <UrlForm disabled={running} onSubmit={handleSubmit} />
+              </div>
+              {doneDocCount > 0 && (
+                <button
+                  type="button"
+                  onClick={handleDownloadZip}
+                  disabled={downloadingZip}
+                  title={downloadUrl ? "Download all docs" : `Download ${doneDocCount} docs so far`}
+                  className="shrink-0 rounded-xl border border-stone-300 bg-white px-3 py-2 font-mono text-xs font-semibold text-stone-800 transition-colors hover:bg-stone-50 disabled:opacity-50"
+                >
+                  {downloadingZip ? "…" : ".zip"}
+                </button>
+              )}
             </div>
           </header>
         )}
 
         {!isLandingView && phase && (
-          <div className="mb-4">
-            <PhaseIndicator phase={phase} detail={phaseDetail} target={target} />
-          </div>
+          <PhaseIndicator phase={phase} target={target} currentDoc={currentDocTitle} doneCount={doneDocCount} />
         )}
 
         {error && (
@@ -176,25 +225,10 @@ export default function Home() {
           </div>
         )}
 
-        {downloadUrl && (
-          <div className="mb-4 flex flex-col gap-3 rounded-3xl border border-emerald-200 bg-emerald-50 p-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p className="text-sm font-semibold text-emerald-900">Docs ready</p>
-              <p className="text-sm text-emerald-700">{docList.length} markdown files are ready to download.</p>
-            </div>
-            <a
-              href={downloadUrl}
-              className="rounded-xl bg-stone-950 px-4 py-2 text-center text-sm font-semibold text-white transition-colors hover:bg-stone-800"
-            >
-              Download .zip
-            </a>
-          </div>
-        )}
-
         {showExplorer && (
-          <section className="grid min-h-[620px] flex-1 grid-cols-1 gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+          <section className="grid h-[calc(100dvh-13rem)] max-h-[calc(100dvh-13rem)] min-h-[360px] flex-1 grid-cols-1 gap-3 overflow-hidden lg:grid-cols-[240px_minmax(0,1fr)]">
             <DocTree docs={docList} files={fileTree} selectedId={selectedDocId} onSelect={setSelectedDocId} />
-            <div className="min-h-0">
+            <div className="flex min-h-0 flex-col overflow-hidden">
               <MarkdownPreview file={previewFile} />
             </div>
           </section>

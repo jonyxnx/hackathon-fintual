@@ -1,58 +1,58 @@
-import type { Phase } from "@/lib/core/orchestrator";
+import type { Phase } from "@/lib/core/webRun";
 
-const PHASE_LABELS: Record<Phase, string> = {
-  parsing: "Parsing the GitHub URL",
-  fetching: "Fetching repo metadata",
-  cloning: "Cloning the repo",
-  ready: "Repo ready - running generators",
-};
+const PHASE_ORDER: Phase[] = ["parsing", "fetching", "ready"];
 
-const PHASE_ORDER: Phase[] = ["parsing", "fetching", "cloning", "ready"];
+function progressPercent(
+  phase: Phase | "generating" | "complete",
+  doneCount: number,
+): number {
+  if (phase === "complete") return 100;
+  if (phase === "generating") return Math.min(92, 48 + doneCount * 5);
+  const idx = PHASE_ORDER.indexOf(phase);
+  return idx >= 0 ? [18, 38, 48][idx] : 12;
+}
+
+function statusLabel(
+  phase: Phase | "generating" | "complete",
+  target: string | null | undefined,
+  currentDoc: string | undefined,
+  doneCount: number,
+): string {
+  if (phase === "complete") return "Done";
+  if (phase === "generating") {
+    if (currentDoc) return currentDoc;
+    if (doneCount > 0) return `${doneCount} docs`;
+    return "Writing";
+  }
+  if (phase === "fetching" && target) return target;
+  return { parsing: "Parsing", fetching: "Fetching", ready: "Preparing" }[phase] ?? "Working";
+}
 
 export function PhaseIndicator({
   phase,
-  detail,
   target,
+  currentDoc,
+  doneCount = 0,
 }: {
   phase: Phase | "generating" | "complete" | null;
-  detail?: string;
   target?: string | null;
+  currentDoc?: string;
+  doneCount?: number;
 }) {
-  if (!phase) return null;
+  if (!phase || phase === "complete") return null;
 
-  const phaseIdx = PHASE_ORDER.indexOf(phase as Phase);
-  const generating = phase === "generating";
-  const complete = phase === "complete";
+  const pct = progressPercent(phase, doneCount);
+  const label = statusLabel(phase, target, currentDoc, doneCount);
 
   return (
-    <div className="flex flex-col gap-3 rounded-3xl border border-amber-200 bg-amber-50/90 px-4 py-3 shadow-sm">
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        {!complete && (
-          <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
-        )}
-        {complete && <span className="w-2 h-2 rounded-full bg-emerald-500" />}
-        <span className={`font-medium ${complete ? "text-emerald-700" : "text-amber-800"}`}>
-          {complete
-            ? "Docs ready for Notion"
-            : generating
-              ? "Generating markdown sections..."
-              : PHASE_LABELS[phase as Phase]}
-        </span>
-        {detail && <span className="font-mono text-stone-500">· {detail}</span>}
-        {target && <span className="font-mono text-stone-500">· {target}</span>}
+    <div className="mb-4 flex items-center gap-2.5 rounded-lg border border-stone-200 bg-white/80 px-3 py-2">
+      <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-stone-200">
+        <div
+          className="h-full rounded-full bg-stone-800 transition-[width] duration-300 ease-out"
+          style={{ width: `${pct}%` }}
+        />
       </div>
-      {!complete && !generating && (
-        <div className="flex gap-1">
-          {PHASE_ORDER.map((p, i) => (
-            <div
-              key={p}
-              className={`h-1 flex-1 rounded-full ${
-                i <= phaseIdx ? "bg-amber-400" : "bg-stone-200"
-              }`}
-            />
-          ))}
-        </div>
-      )}
+      <span className="max-w-[45%] shrink-0 truncate text-xs text-stone-500">{label}</span>
     </div>
   );
 }

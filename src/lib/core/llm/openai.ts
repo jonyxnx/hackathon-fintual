@@ -9,7 +9,7 @@ export class OpenAIProvider implements LLMProvider {
 
   constructor() {
     this.client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    this.model = process.env.OPENAI_MODEL || "gpt-4o";
+    this.model = process.env.OPENAI_MODEL || "gpt-5";
   }
 
   async complete(input: LLMInput): Promise<string> {

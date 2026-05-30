@@ -1,4 +1,5 @@
 import type { RepoContext } from "./context";
+import { mapWithConcurrency } from "./concurrency";
 import { generateAgentsDoc, type DocManifest } from "./generators/agent";
 import { folderGenerator } from "./generators/folder";
 import { isDocumentableFile } from "./generators/file";
@@ -13,6 +14,31 @@ import type { LLMProvider } from "./llm";
 export const DEFAULT_MIN_FOLDER_FILES = 3;
 export const WEB_MIN_FOLDER_FILES = 4;
 export const AGENTS_PAGE_TITLE = "AGENTS.md";
+
+/** Max concurrent folder (and root) doc LLM calls. */
+const DOC_CONCURRENCY = Math.max(1, Number(process.env.KITDOC_DOC_CONCURRENCY ?? 4) || 4);
+
+class LlmSlotPool {
+  private active = 0;
+  private readonly waiters: Array<() => void> = [];
+
+  constructor(private readonly max: number) {}
+
+  async use<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.active >= this.max) {
+      await new Promise<void>((resolve) => this.waiters.push(resolve));
+    }
+    this.active++;
+    try {
+      return await fn();
+    } finally {
+      this.active--;
+      this.waiters.shift()?.();
+    }
+  }
+}
+
+const llmSlots = new LlmSlotPool(DOC_CONCURRENCY);
 
 /** A folder this large (or with this many subfolders) gets a deeper, concern-split doc. */
 const BIG_FOLDER_FILES = 12;
@@ -101,6 +127,65 @@ function folderFilename(path: string): string {
   return `${path}.md`;
 }
 
+async function documentDirNode(
+  child: DirNode,
+  parentPageId: string,
+  manifest: DocManifest,
+  opts: Required<Pick<DocumentRepoOptions, "ctx" | "llm" | "sink" | "depth" | "minFolderFiles">> &
+    Pick<DocumentRepoOptions, "onEvent">,
+): Promise<void> {
+  if (!isSignificant(child, opts.minFolderFiles)) {
+    manifest.skipped.push(child.path);
+    await documentChildren(child, parentPageId, manifest, opts);
+    return;
+  }
+
+  const deep = isBig(child);
+  const icon = iconForPath(child.path);
+  const filename = folderFilename(child.path);
+  opts.onEvent?.({
+    type: "doc:started",
+    id: child.path,
+    title: child.name,
+    filename,
+    icon,
+    parentId: parentPageId,
+    kind: "folder",
+  });
+  const folderPageId = await opts.sink.ensure(parentPageId, child.name, icon, child.path);
+  manifest.documented.push({ path: child.path, kind: "folder", icon });
+
+  await documentChildren(child, folderPageId, manifest, opts);
+
+  try {
+    const folderDoc = await llmSlots.use(() => folderGenerator(child.path, { deep }).run(opts.ctx, opts.llm, opts.depth));
+    const result = { ...folderDoc, filename };
+    await opts.sink.write(folderPageId, folderDoc.content, icon, child.path);
+    opts.onEvent?.({
+      type: "doc:done",
+      id: child.path,
+      title: child.name,
+      filename,
+      icon,
+      parentId: parentPageId,
+      kind: "folder",
+      content: folderDoc.content,
+      result,
+    });
+  } catch (err) {
+    opts.onEvent?.({
+      type: "doc:failed",
+      id: child.path,
+      title: child.name,
+      filename,
+      icon,
+      parentId: parentPageId,
+      kind: "folder",
+      error: (err as Error).message ?? String(err),
+    });
+  }
+}
+
 async function documentChildren(
   node: DirNode,
   parentPageId: string,
@@ -109,59 +194,9 @@ async function documentChildren(
     Pick<DocumentRepoOptions, "onEvent">,
 ): Promise<void> {
   const children = [...node.dirs.values()].sort((a, b) => a.name.localeCompare(b.name));
-
-  for (const child of children) {
-    if (!isSignificant(child, opts.minFolderFiles)) {
-      manifest.skipped.push(child.path);
-      await documentChildren(child, parentPageId, manifest, opts);
-      continue;
-    }
-
-    const deep = isBig(child);
-    const icon = iconForPath(child.path);
-    const filename = folderFilename(child.path);
-    opts.onEvent?.({
-      type: "doc:started",
-      id: child.path,
-      title: child.name,
-      filename,
-      icon,
-      parentId: parentPageId,
-      kind: "folder",
-    });
-    const folderPageId = await opts.sink.ensure(parentPageId, child.name, icon, child.path);
-    manifest.documented.push({ path: child.path, kind: "folder", icon });
-
-    await documentChildren(child, folderPageId, manifest, opts);
-
-    try {
-      const folderDoc = await folderGenerator(child.path, { deep }).run(opts.ctx, opts.llm, opts.depth);
-      const result = { ...folderDoc, filename };
-      await opts.sink.write(folderPageId, folderDoc.content, icon, child.path);
-      opts.onEvent?.({
-        type: "doc:done",
-        id: child.path,
-        title: child.name,
-        filename,
-        icon,
-        parentId: parentPageId,
-        kind: "folder",
-        content: folderDoc.content,
-        result,
-      });
-    } catch (err) {
-      opts.onEvent?.({
-        type: "doc:failed",
-        id: child.path,
-        title: child.name,
-        filename,
-        icon,
-        parentId: parentPageId,
-        kind: "folder",
-        error: (err as Error).message ?? String(err),
-      });
-    }
-  }
+  await mapWithConcurrency(children, DOC_CONCURRENCY, (child) =>
+    documentDirNode(child, parentPageId, manifest, opts),
+  );
 }
 
 export async function documentRepo(opts: DocumentRepoOptions): Promise<DocManifest> {
@@ -183,11 +218,15 @@ export async function documentRepo(opts: DocumentRepoOptions): Promise<DocManife
 
   for (const { gen, title, filename, icon } of ROOT_DOCS) {
     opts.onEvent?.({ type: "doc:started", id: filename, title, filename, icon, parentId: opts.parentPageId, kind: "root" });
+  }
+
+  const completedRoots = new Set<string>();
+  await mapWithConcurrency(ROOT_DOCS, DOC_CONCURRENCY, async ({ gen, title, filename, icon }) => {
     try {
-      const doc = await gen.run(opts.ctx, opts.llm, opts.depth);
+      const doc = await llmSlots.use(() => gen.run(opts.ctx, opts.llm, opts.depth));
       const pageId = await opts.sink.ensure(opts.parentPageId, title, icon, title);
       await opts.sink.write(pageId, doc.content, icon, title);
-      manifest.rootDocs.push({ title, icon });
+      completedRoots.add(filename);
       opts.onEvent?.({
         type: "doc:done",
         id: filename,
@@ -211,7 +250,11 @@ export async function documentRepo(opts: DocumentRepoOptions): Promise<DocManife
         error: (err as Error).message ?? String(err),
       });
     }
-  }
+  });
+  manifest.rootDocs = ROOT_DOCS.filter(({ filename }) => completedRoots.has(filename)).map(({ title, icon }) => ({
+    title,
+    icon,
+  }));
 
   const agentsPageId = await opts.sink.ensure(opts.parentPageId, AGENTS_PAGE_TITLE, AGENTS_ICON, AGENTS_PAGE_TITLE);
   const tree = buildTree(opts.ctx.fileTree, opts.changedRoots ?? undefined);

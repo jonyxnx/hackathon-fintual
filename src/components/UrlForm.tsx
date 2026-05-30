@@ -42,9 +42,6 @@ export function UrlForm({ disabled, onSubmit }: Props) {
           {disabled ? "Working..." : "Generate docs"}
         </button>
       </div>
-      <p className="text-xs leading-5 text-stone-500">
-        Depth is fixed to 2 in the web app: short, readable, important-only docs.
-      </p>
     </form>
   );
 }

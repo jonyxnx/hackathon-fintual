@@ -6,8 +6,10 @@ import { getLLM } from "./llm";
 import { RepoContext } from "./context";
 import { parseGitHubUrl } from "./url";
 
+export type Phase = "parsing" | "fetching" | "ready";
+
 export type WebDocEvent =
-  | { type: "phase"; phase: "parsing" | "fetching" | "ready"; detail?: string }
+  | { type: "phase"; phase: Phase; detail?: string }
   | { type: "repo"; owner: string; repo: string; ref: string; fileTree: string[] }
   | DocTreeEvent
   | { type: "complete"; results: GeneratorResult[] }

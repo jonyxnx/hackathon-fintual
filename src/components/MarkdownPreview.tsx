@@ -16,14 +16,14 @@ interface Props {
 export function MarkdownPreview({ file }: Props) {
   if (!file) {
     return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-3xl border border-dashed border-stone-200 bg-white/70 text-sm text-stone-400">
+      <div className="flex min-h-[360px] items-center justify-center rounded-3xl border border-dashed border-stone-200 bg-white/70 text-sm text-stone-400">
         Select a generated doc to preview it.
       </div>
     );
   }
 
   return (
-    <article className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl border border-stone-200 bg-white shadow-sm">
+    <article className="flex h-full min-h-0 flex-col overflow-hidden rounded-3xl border border-stone-200 bg-white shadow-sm">
       <div className="border-b border-stone-100 px-5 py-4">
         <p className="font-mono text-xs text-stone-400">{file.filename}</p>
       </div>

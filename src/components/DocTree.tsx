@@ -1,6 +1,5 @@
 "use client";
 
-import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 
 export interface DocNavItem {
@@ -20,49 +19,73 @@ interface Props {
   onSelect: (id: string) => void;
 }
 
+const MAX_FOLDER_CHILDREN = 20;
+const MAX_TREE_NODES = 72;
+
 function folderDepth(id: string): number {
   return id.includes("/") ? id.split("/").length - 1 : 0;
 }
 
 export function DocTree({ docs, files, selectedId, onSelect }: Props) {
+  const [filesOpen, setFilesOpen] = useState(false);
   const rootDocs = docs.filter((doc) => doc.kind === "root" || doc.kind === "agent");
   const folderDocs = docs.filter((doc) => doc.kind === "folder").sort((a, b) => a.id.localeCompare(b.id));
   const fileNodes = useMemo(() => buildFileTree(files), [files]);
+  const nodeBudget = { remaining: MAX_TREE_NODES };
 
   return (
-    <aside className="flex h-full min-h-0 flex-col rounded-3xl border border-stone-200 bg-white/80 p-3 shadow-sm">
-      <div className="border-b border-stone-100 px-2 pb-3">
-        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-400">Workspace</p>
-        <h2 className="mt-1 text-sm font-semibold text-stone-950">Docs and files</h2>
+    <aside className="flex h-full max-h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-stone-200 bg-white/80 p-2 shadow-sm">
+      <div className="shrink-0 border-b border-stone-100 px-2 pb-2 pt-1">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-stone-400">Workspace</p>
+        <h2 className="text-sm font-semibold text-stone-950">Docs</h2>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto py-3">
-        <TreeSection title="Docs">
+      <div className="min-h-0 flex-1 overflow-y-auto py-2">
+        <div className="space-y-0.5">
           {[...rootDocs, ...folderDocs].map((doc) => (
             <button
               key={doc.id}
               type="button"
               onClick={() => onSelect(doc.id)}
-              className={`flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left text-sm transition-colors ${
+              className={`flex w-full items-center gap-1.5 rounded-lg px-2 py-1 text-left text-xs transition-colors ${
                 selectedId === doc.id ? "bg-stone-950 text-white" : "text-stone-700 hover:bg-stone-100"
               }`}
-              style={{ paddingLeft: doc.kind === "folder" ? 8 + folderDepth(doc.id) * 14 : 8 }}
+              style={{ paddingLeft: doc.kind === "folder" ? 6 + folderDepth(doc.id) * 12 : 6 }}
             >
-              <span className="w-5 shrink-0 text-center">
+              <span className="w-4 shrink-0 text-center text-[11px]">
                 {doc.status === "running" ? "..." : doc.status === "failed" ? "!" : doc.icon}
               </span>
               <span className="min-w-0 flex-1 truncate">{doc.title}</span>
             </button>
           ))}
-          {docs.length === 0 && <p className="px-2 py-1 text-sm text-stone-400">Docs will appear here.</p>}
-        </TreeSection>
+          {docs.length === 0 && <p className="px-2 py-1 text-xs text-stone-400">Docs will appear here.</p>}
+        </div>
+      </div>
 
-        <TreeSection title={`Files ${files.length ? `(${files.length})` : ""}`}>
-          {fileNodes.map((node) => (
-            <FileNodeView key={node.path} node={node} depth={0} />
-          ))}
-          {files.length === 0 && <p className="px-2 py-1 text-sm text-stone-400">Repo files will appear here.</p>}
-        </TreeSection>
+      <div className="shrink-0 border-t border-stone-100 pt-1">
+        <button
+          type="button"
+          onClick={() => setFilesOpen((value) => !value)}
+          className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left hover:bg-stone-100"
+          aria-expanded={filesOpen}
+        >
+          <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-stone-400">
+            Files {files.length ? `(${files.length})` : ""}
+          </span>
+          <span className="text-[10px] text-stone-400">{filesOpen ? "Hide" : "Show"}</span>
+        </button>
+
+        {filesOpen && (
+          <div className="mt-1 max-h-[min(11rem,28vh)] min-h-0 overflow-y-auto pb-1">
+            {fileNodes.map((node) => (
+              <FileNodeView key={node.path} node={node} depth={0} budget={nodeBudget} />
+            ))}
+            {nodeBudget.remaining <= 0 && files.length > 0 && (
+              <p className="px-2 py-1 text-[10px] text-stone-400">Tree truncated for size. Download the zip for the full repo map.</p>
+            )}
+            {files.length === 0 && <p className="px-2 py-1 text-xs text-stone-400">Repo files will appear here.</p>}
+          </div>
+        )}
       </div>
     </aside>
   );
@@ -106,48 +129,59 @@ function sortFileNodes(nodes: FileNode[]): FileNode[] {
     .map((node) => ({ ...node, children: new Map(sortFileNodes([...node.children.values()]).map((child) => [child.name, child])) }));
 }
 
-function FileNodeView({ node, depth }: { node: FileNode; depth: number }) {
+function FileNodeView({
+  node,
+  depth,
+  budget,
+}: {
+  node: FileNode;
+  depth: number;
+  budget: { remaining: number };
+}) {
   const [open, setOpen] = useState(false);
   const children = [...node.children.values()];
   const isFolder = node.type === "folder";
 
+  if (budget.remaining <= 0) return null;
+  budget.remaining -= 1;
+
   if (isFolder) {
+    const visibleChildren = children.slice(0, MAX_FOLDER_CHILDREN);
+    const hiddenCount = children.length - visibleChildren.length;
+
     return (
       <div>
         <button
           type="button"
           onClick={() => setOpen((value) => !value)}
-          className="flex w-full items-center gap-1 truncate rounded-lg px-2 py-1 font-mono text-xs text-stone-600 hover:bg-stone-100"
-          style={{ paddingLeft: 8 + depth * 14 }}
+          className="flex w-full items-center gap-1 truncate rounded-md px-1.5 py-0.5 font-mono text-[11px] text-stone-600 hover:bg-stone-100"
+          style={{ paddingLeft: 6 + depth * 12 }}
           title={node.path}
           aria-expanded={open}
         >
-          <span className="w-3 shrink-0 text-stone-400">{open ? "▾" : "▸"}</span>
+          <span className="w-3 shrink-0 text-[10px] text-stone-400">{open ? "▾" : "▸"}</span>
           <span className="min-w-0 flex-1 truncate text-left">{node.name}</span>
           <span className="shrink-0 text-[10px] text-stone-400">{node.fileCount}</span>
         </button>
-        {open && children.map((child) => <FileNodeView key={child.path} node={child} depth={depth + 1} />)}
+        {open &&
+          visibleChildren.map((child) => <FileNodeView key={child.path} node={child} depth={depth + 1} budget={budget} />)}
+        {open && hiddenCount > 0 && (
+          <p className="truncate px-2 py-0.5 font-mono text-[10px] text-stone-400" style={{ paddingLeft: 6 + (depth + 1) * 12 }}>
+            ... {hiddenCount} more
+          </p>
+        )}
       </div>
     );
   }
 
   return (
     <div
-      className="truncate rounded-lg px-2 py-1 font-mono text-xs text-stone-500"
-      style={{ paddingLeft: 8 + depth * 14 }}
+      className="truncate rounded-md px-1.5 py-0.5 font-mono text-[11px] text-stone-500"
+      style={{ paddingLeft: 6 + depth * 12 }}
       title={node.path}
     >
       <span className="mr-1 text-stone-300">·</span>
       {node.name}
     </div>
-  );
-}
-
-function TreeSection({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <section className="mb-4">
-      <h3 className="mb-1 px-2 text-xs font-semibold uppercase tracking-[0.18em] text-stone-400">{title}</h3>
-      <div className="space-y-0.5">{children}</div>
-    </section>
   );
 }

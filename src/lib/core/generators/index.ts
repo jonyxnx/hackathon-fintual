@@ -1,5 +1,12 @@
 import type { RepoContext } from "../context";
 import type { LLMProvider } from "../llm";
+import {
+  DEFAULT_TOTAL_PROMPT_CHARS,
+  capFilePaths,
+  compressFileContent,
+  compressionNote,
+  resolveFileBudgets,
+} from "../promptCompress";
 import { overview } from "./overview";
 import { setup } from "./setup";
 import { testing } from "./testing";
@@ -97,27 +104,53 @@ const FALLBACK_CONTEXT_PATTERNS = [
   "**/go.mod",
 ];
 
+export interface BuildFileBlocksOptions {
+  perFileMax?: number;
+  /** Max combined size of all file blocks (chars). Defaults to ~96KB. */
+  totalMax?: number;
+  /** Hard cap on how many files to include after compression budgeting. */
+  maxFiles?: number;
+}
+
 export async function buildBroadContext(
   ctx: RepoContext,
   maxFiles = 6,
+  depth?: DepthConfig,
 ): Promise<{ blocks: string; paths: string[] }> {
   const paths = await ctx.findFiles(FALLBACK_CONTEXT_PATTERNS, maxFiles);
-  const blocks = await buildFileBlocks(ctx, paths, 12 * 1024);
+  const blocks = await buildFileBlocks(ctx, paths, {
+    perFileMax: scaledContext(12 * 1024, depth, 4 * 1024),
+    maxFiles: scaledContext(maxFiles, depth, 3),
+  });
   return { blocks, paths };
 }
 
 export async function buildFileBlocks(
   ctx: RepoContext,
   paths: string[],
-  perFileMax = 16 * 1024,
+  perFileMaxOrOpts: number | BuildFileBlocksOptions = 16 * 1024,
 ): Promise<string> {
+  const opts: BuildFileBlocksOptions =
+    typeof perFileMaxOrOpts === "number" ? { perFileMax: perFileMaxOrOpts } : perFileMaxOrOpts;
+  const perFileMax = opts.perFileMax ?? 16 * 1024;
+  const totalMax = opts.totalMax ?? DEFAULT_TOTAL_PROMPT_CHARS;
+  const maxFiles = opts.maxFiles ?? 32;
+
+  const originalCount = paths.length;
+  const cappedPaths = capFilePaths(paths, maxFiles);
+  const budgets = resolveFileBudgets(cappedPaths.length, { perFileMax, totalMax });
+
   const blocks: string[] = [];
-  for (const p of paths) {
+  for (let i = 0; i < cappedPaths.length; i++) {
+    const p = cappedPaths[i];
     if (!(await ctx.exists(p))) continue;
-    const content = await ctx.readFile(p, perFileMax);
+    const raw = await ctx.readFile(p, budgets[i] * 2);
+    const content = compressFileContent(raw, p, budgets[i]);
     blocks.push(`<file path="${p}">\n${content}\n</file>`);
   }
-  return blocks.join("\n\n");
+
+  const note = compressionNote(cappedPaths.length, originalCount);
+  return note + blocks.join("\n\n");
 }
 
 export const SYSTEM_PROMPT = `You are a technical writer creating SHORT, high-signal internal docs for a real codebase. Your reader is a human developer joining the team.

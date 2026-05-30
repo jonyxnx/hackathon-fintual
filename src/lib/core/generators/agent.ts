@@ -98,7 +98,10 @@ export async function generateAgentsDoc(
   const contextFiles = await ctx.findFiles(AGENT_CONTEXT_PATTERNS, scaledContext(24, depth, 8));
   const sourceSamples = ctx.sampleSourceFiles(scaledContext(24, depth, 8));
   const paths = [...new Set([...contextFiles, ...sourceSamples])];
-  const fileBlocks = await buildFileBlocks(ctx, paths, scaledContext(10 * 1024, depth, 4 * 1024));
+  const fileBlocks = await buildFileBlocks(ctx, paths, {
+    perFileMax: scaledContext(10 * 1024, depth, 4 * 1024),
+    maxFiles: scaledContext(40, depth, 10),
+  });
   const topDirs = ctx.topDirs();
 
   const coverageBlock = manifest

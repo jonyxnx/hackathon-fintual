@@ -39,9 +39,12 @@ export const conventions: Generator = {
     const sampleFiles = ctx.sampleSourceFiles(scaledContext(24, depth, 10));
     const signals = [...configFiles, ...sampleFiles];
 
-    let fileBlocks = await buildFileBlocks(ctx, signals, scaledContext(14 * 1024, depth, 5 * 1024));
+    let fileBlocks = await buildFileBlocks(ctx, signals, {
+      perFileMax: scaledContext(14 * 1024, depth, 5 * 1024),
+      maxFiles: scaledContext(36, depth, 12),
+    });
     if (!fileBlocks) {
-      const fallback = await buildBroadContext(ctx);
+      const fallback = await buildBroadContext(ctx, 6, depth);
       fileBlocks = fallback.blocks;
       signals.push(...fallback.paths);
     }

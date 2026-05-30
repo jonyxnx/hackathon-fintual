@@ -100,7 +100,10 @@ export function folderGenerator(folder: string, opts: FolderGeneratorOptions = {
       const baseSample = deep ? SAMPLE_LIMIT + 12 : SAMPLE_LIMIT;
       const sampleLimit = scaledContext(baseSample, depth, 6);
       const sampleFiles = pickRepresentativeFiles(files).slice(0, sampleLimit);
-      const fileBlocks = await buildFileBlocks(ctx, sampleFiles, scaledContext(14 * 1024, depth, 4 * 1024));
+      const fileBlocks = await buildFileBlocks(ctx, sampleFiles, {
+        perFileMax: scaledContext(14 * 1024, depth, 4 * 1024),
+        maxFiles: sampleLimit,
+      });
       const subdirs = directSubdirs(files, normalizedFolder);
 
       const deepSection = deep
