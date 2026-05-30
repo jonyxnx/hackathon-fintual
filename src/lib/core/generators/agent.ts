@@ -1,6 +1,13 @@
 import type { RepoContext } from "../context";
 import type { LLMProvider } from "../llm";
-import { buildFileBlocks, type GeneratorResult } from "./index";
+import {
+  buildFileBlocks,
+  depthGuidance,
+  scaledContext,
+  scaledTokens,
+  type DepthConfig,
+  type GeneratorResult,
+} from "./index";
 
 /**
  * AGENTS.md is the one document written FOR AI coding agents (not human
@@ -86,11 +93,12 @@ export async function generateAgentsDoc(
   ctx: RepoContext,
   llm: LLMProvider,
   manifest?: DocManifest,
+  depth?: DepthConfig,
 ): Promise<GeneratorResult> {
-  const contextFiles = await ctx.findFiles(AGENT_CONTEXT_PATTERNS, 24);
-  const sourceSamples = ctx.sampleSourceFiles(24);
+  const contextFiles = await ctx.findFiles(AGENT_CONTEXT_PATTERNS, scaledContext(24, depth, 8));
+  const sourceSamples = ctx.sampleSourceFiles(scaledContext(24, depth, 8));
   const paths = [...new Set([...contextFiles, ...sourceSamples])];
-  const fileBlocks = await buildFileBlocks(ctx, paths, 10 * 1024);
+  const fileBlocks = await buildFileBlocks(ctx, paths, scaledContext(10 * 1024, depth, 4 * 1024));
   const topDirs = ctx.topDirs();
 
   const coverageBlock = manifest
@@ -122,9 +130,10 @@ Produce a focused AGENTS.md (omit any section with nothing useful):
 1. \`# AGENTS.md\` heading.
 2. \`## Orientation\` - what this repo is in 1-2 lines and the few files to open first.
 3. \`## Where things live\` - a compact table of the important areas only: Area/path | What it does | When to touch. Don't list every file.
-4. \`## Working safely\` - the key install/run/test/verify commands and the few rules and hazards an agent must respect.${coverageSections}`;
+4. \`## Working safely\` - the key install/run/test/verify commands and the few rules and hazards an agent must respect.${coverageSections}
+${depthGuidance(depth)}`;
 
-  const content = await llm.complete({ system: AGENT_SYSTEM_PROMPT, user, maxTokens: 3500 });
+  const content = await llm.complete({ system: AGENT_SYSTEM_PROMPT, user, maxTokens: scaledTokens(3500, depth) });
   return { filename: "AGENTS.md", content, signals: paths };
 }
 

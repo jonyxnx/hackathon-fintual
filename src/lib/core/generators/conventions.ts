@@ -1,5 +1,5 @@
 import type { Generator } from "./index";
-import { SYSTEM_PROMPT, buildBroadContext, buildFileBlocks } from "./index";
+import { SYSTEM_PROMPT, buildBroadContext, buildFileBlocks, depthGuidance, scaledTokens } from "./index";
 
 const CONFIG_PATTERNS = [
   "**/.eslintrc",
@@ -27,7 +27,7 @@ export const conventions: Generator = {
   id: "conventions",
   title: "Conventions",
   filename: "conventions.md",
-  async run(ctx, llm) {
+  async run(ctx, llm, depth) {
     const configFiles = await ctx.findFiles(CONFIG_PATTERNS, 20);
     const sampleFiles = ctx.sampleSourceFiles(16);
     const signals = [...configFiles, ...sampleFiles];
@@ -52,9 +52,10 @@ Produce a short doc (only what's supported by the config/code; omit empty sectio
 3. \`## Conventions that matter\` — the handful of patterns a new dev must follow (naming, structure, error handling, etc.) as short bullets.
 4. \`## Watch out for\` — a few real gotchas or anti-patterns to avoid here.
 
-Keep it short and concrete. Don't restate generic best practices — only what's specific to this repo.`;
+Keep it short and concrete. Don't restate generic best practices — only what's specific to this repo.
+${depthGuidance(depth)}`;
 
-    const content = await llm.complete({ system: SYSTEM_PROMPT, user, maxTokens: 1800 });
+    const content = await llm.complete({ system: SYSTEM_PROMPT, user, maxTokens: scaledTokens(1800, depth) });
     return { filename: "conventions.md", content, signals };
   },
 };

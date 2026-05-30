@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { Generator } from "./index";
-import { SYSTEM_PROMPT, buildFileBlocks, notDetectedStub } from "./index";
+import { SYSTEM_PROMPT, buildFileBlocks, depthGuidance, notDetectedStub, scaledContext, scaledTokens } from "./index";
 
 const SAMPLE_LIMIT = 30;
 const FILE_TREE_LIMIT = 400;
@@ -86,7 +86,7 @@ export function folderGenerator(folder: string, opts: FolderGeneratorOptions = {
     id: `folder:${normalizedFolder}`,
     title: normalizedFolder,
     filename: `${normalizedFolder}.md`,
-    async run(ctx, llm) {
+    async run(ctx, llm, depth) {
       const files = ctx.fileTree.filter((file) => file === normalizedFolder || file.startsWith(`${normalizedFolder}/`)).sort();
 
       if (files.length === 0) {
@@ -97,9 +97,10 @@ export function folderGenerator(folder: string, opts: FolderGeneratorOptions = {
         };
       }
 
-      const sampleLimit = deep ? SAMPLE_LIMIT + 12 : SAMPLE_LIMIT;
+      const baseSample = deep ? SAMPLE_LIMIT + 12 : SAMPLE_LIMIT;
+      const sampleLimit = scaledContext(baseSample, depth, 6);
       const sampleFiles = pickRepresentativeFiles(files).slice(0, sampleLimit);
-      const fileBlocks = await buildFileBlocks(ctx, sampleFiles, 14 * 1024);
+      const fileBlocks = await buildFileBlocks(ctx, sampleFiles, scaledContext(14 * 1024, depth, 4 * 1024));
       const subdirs = directSubdirs(files, normalizedFolder);
 
       const deepSection = deep
@@ -130,9 +131,10 @@ Produce a short doc (omit any section with nothing important):
 3. \`## Key files\` - only the few most important files/subfolders, one short line each. Skip minor ones.
 4. \`## How to work here\` - where to start for common changes, plus any real gotcha.${deepSection}
 
-Keep it short and plain. Don't document every file — only the important ones.`;
+Keep it short and plain. Don't document every file — only the important ones.
+${depthGuidance(depth)}`;
 
-      const content = await llm.complete({ system: SYSTEM_PROMPT, user, maxTokens: deep ? 2800 : 1600 });
+      const content = await llm.complete({ system: SYSTEM_PROMPT, user, maxTokens: scaledTokens(deep ? 2800 : 1600, depth) });
       return { filename: `${normalizedFolder}.md`, content, signals: sampleFiles };
     },
   };

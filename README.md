@@ -50,6 +50,8 @@ For each run it creates a repo page and, beneath it, a page-in-page hierarchy th
 
 Kitdoc decides its scope automatically: the **first run** in a repo (no `AGENTS.md` on the Notion repo page yet) documents the **entire codebase**; **subsequent runs** only refresh the root docs plus the folders that changed between `--base` and `--head`. Pass `--all` (or `document-all: "true"` in the action) to force a full re-documentation.
 
+Use `--depth <1-10>` (or the `depth` action input) to control how thorough the docs are: **10** scans the whole repo in detail (roughly line by line), **5** covers just the important things (the default), and **1** gives only enough to get a rough idea of what the repo does. Depth scales both how much of the code is read and how long each page is.
+
 Required repository secrets:
 
 - `NOTION_TOKEN`: Notion integration token with access to the parent page.

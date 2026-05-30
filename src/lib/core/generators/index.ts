@@ -13,11 +13,64 @@ export interface GeneratorResult {
   signals: string[];
 }
 
+/**
+ * How deep a doc should go, on a 1-10 scale.
+ * - 10: scan the whole repo in detail (effectively line by line).
+ * - 5: cover only the important things (the default).
+ * - 1: just enough to get a rough idea of what the repo does.
+ */
+export interface DepthConfig {
+  level: number;
+  /** Multiplier applied to a generator's base maxTokens. */
+  tokenScale: number;
+  /** Multiplier applied to how much file context (count/bytes) to read. */
+  contextScale: number;
+  /** Instruction injected into prompts describing how deep to go. */
+  guidance: string;
+}
+
+export const DEFAULT_DEPTH = 5;
+
+export function resolveDepth(level: number): DepthConfig {
+  const clamped = Math.min(10, Math.max(1, Math.round(level)));
+  // Level 5 is the baseline (matches the previous, un-scaled behavior).
+  const tokenScale = clamped <= 5 ? 0.3 + (clamped - 1) * (0.7 / 4) : 1 + (clamped - 5) * (1.5 / 5);
+  const contextScale = clamped <= 5 ? 0.4 + (clamped - 1) * (0.6 / 4) : 1 + (clamped - 5) * (1.0 / 5);
+
+  let guidance: string;
+  if (clamped >= 8) {
+    guidance = `Depth ${clamped}/10: be thorough. Walk the important files in detail (at depth 10, effectively line by line) and explain how things actually work. Stay readable, but favor completeness over brevity.`;
+  } else if (clamped >= 4) {
+    guidance = `Depth ${clamped}/10: cover only the important things and keep it concise.`;
+  } else {
+    guidance = `Depth ${clamped}/10: stay very high level — just enough to give a rough idea of what this is. A few short bullets; skip the details.`;
+  }
+
+  return { level: clamped, tokenScale, contextScale, guidance };
+}
+
+/** Scale a generator's base token budget by the active depth. */
+export function scaledTokens(base: number, depth?: DepthConfig): number {
+  if (!depth) return base;
+  return Math.max(256, Math.round(base * depth.tokenScale));
+}
+
+/** Scale a count/byte budget by the active depth (with a sensible floor). */
+export function scaledContext(base: number, depth: DepthConfig | undefined, min: number): number {
+  if (!depth) return base;
+  return Math.max(min, Math.round(base * depth.contextScale));
+}
+
+/** Depth guidance line for prompts, or empty string when depth is unset. */
+export function depthGuidance(depth?: DepthConfig): string {
+  return depth ? `\n${depth.guidance}\n` : "";
+}
+
 export interface Generator {
   id: string;
   title: string;
   filename: string;
-  run(ctx: RepoContext, llm: LLMProvider): Promise<GeneratorResult>;
+  run(ctx: RepoContext, llm: LLMProvider, depth?: DepthConfig): Promise<GeneratorResult>;
 }
 
 export const ALL_GENERATORS: Generator[] = [

@@ -15,7 +15,7 @@ import { setup } from "../lib/core/generators/setup";
 import { deployment } from "../lib/core/generators/deployment";
 import { conventions } from "../lib/core/generators/conventions";
 import { improvements } from "../lib/core/generators/improvements";
-import type { Generator } from "../lib/core/generators";
+import { DEFAULT_DEPTH, resolveDepth, type DepthConfig, type Generator } from "../lib/core/generators";
 import { AGENTS_ICON, REPO_ICON, iconForPath } from "../lib/core/icons";
 import { getLLM, type LLMProvider, type ProviderName } from "../lib/core/llm";
 import { createNotionDocsFromEnv, type NotionDocs } from "../lib/core/notion";
@@ -30,6 +30,7 @@ interface CliOptions {
   all: boolean;
   dryRun: boolean;
   minFolderFiles: number;
+  depth: number;
 }
 
 /** A folder needs at least this many documentable files (in its subtree) to get its own page. */
@@ -64,6 +65,7 @@ Options:
   --provider <name>  LLM provider: anthropic or openai
   --all              Document the whole repository (every significant folder)
   --min-folder-files <n>  Min documentable files for a folder to get its own page (default: ${DEFAULT_MIN_FOLDER_FILES})
+  --depth <1-10>     Documentation depth: 10 = whole repo in detail, 5 = important things (default), 1 = rough idea
   --dry-run          Print generated markdown instead of syncing to Notion
   --help             Show this help message`;
 }
@@ -87,6 +89,7 @@ function parseArgs(argv: string[]): CliOptions {
     all: false,
     dryRun: false,
     minFolderFiles: DEFAULT_MIN_FOLDER_FILES,
+    depth: DEFAULT_DEPTH,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -126,6 +129,16 @@ function parseArgs(argv: string[]): CliOptions {
           throw new Error(`--min-folder-files requires a positive integer, got: ${raw}`);
         }
         opts.minFolderFiles = parsed;
+        i++;
+        break;
+      }
+      case "--depth": {
+        const raw = readValue(argv, i, arg);
+        const parsed = Number.parseInt(raw, 10);
+        if (!Number.isFinite(parsed) || parsed < 1 || parsed > 10) {
+          throw new Error(`--depth requires an integer from 1 to 10, got: ${raw}`);
+        }
+        opts.depth = parsed;
         i++;
         break;
       }
@@ -251,6 +264,7 @@ interface WalkState {
   sink: DocSink;
   manifest: DocManifest;
   minFolderFiles: number;
+  depth: DepthConfig;
 }
 
 /**
@@ -313,7 +327,7 @@ async function documentChildren(node: DirNode, parentPageId: string, state: Walk
     await documentChildren(child, folderPageId, state);
 
     // 3. Write this folder's prose LAST so it lands below the subpages.
-    const folderDoc = await folderGenerator(child.path, { deep }).run(state.ctx, state.llm);
+    const folderDoc = await folderGenerator(child.path, { deep }).run(state.ctx, state.llm, state.depth);
     await state.sink.write(folderPageId, folderDoc.content, icon, child.path);
   }
 }
@@ -345,6 +359,7 @@ async function main(): Promise<void> {
 
   const repoPageId = repoPage?.id ?? "";
   const sink: DocSink = notionTarget ? new NotionSink(notionTarget.notion) : new DryRunSink();
+  const depth = resolveDepth(opts.depth);
 
   // First run documents everything; subsequent runs only refresh changed areas.
   const fullRun = await resolveFullRun(opts, notionTarget?.notion ?? null, repoPageId);
@@ -363,13 +378,15 @@ async function main(): Promise<void> {
     sink,
     manifest: { documented: [], skipped: [], rootDocs: [], fullRun },
     minFolderFiles: opts.minFolderFiles,
+    depth,
   };
+  console.log(`Documentation depth: ${depth.level}/10.`);
 
   // Root-level whole-codebase docs (local setup, deployment, patterns,
   // improvements). Created first so they sit at the TOP of the repo page,
   // above the per-folder pages. Always regenerated so they stay current.
   for (const { gen, title, icon } of ROOT_DOCS) {
-    const doc = await gen.run(ctx, llm);
+    const doc = await gen.run(ctx, llm, depth);
     await writeDoc(state, repoPageId, title, doc.content, icon, title);
     state.manifest.rootDocs.push({ title, icon });
   }
@@ -395,7 +412,7 @@ async function main(): Promise<void> {
   // AGENTS.md content is written LAST so it can index everything that was
   // produced and report on coverage and gaps. Its page (reserved above) also
   // marks the repo as documented, which makes the next run incremental.
-  const agentsDoc = await generateAgentsDoc(ctx, llm, state.manifest);
+  const agentsDoc = await generateAgentsDoc(ctx, llm, state.manifest, depth);
   await sink.write(agentsPageId, agentsDoc.content, AGENTS_ICON, AGENTS_PAGE_TITLE);
 
   console.log(

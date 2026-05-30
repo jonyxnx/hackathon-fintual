@@ -1,5 +1,5 @@
 import type { Generator } from "./index";
-import { SYSTEM_PROMPT, buildBroadContext, buildFileBlocks } from "./index";
+import { SYSTEM_PROMPT, buildBroadContext, buildFileBlocks, depthGuidance, scaledTokens } from "./index";
 
 const SIGNAL_PATTERNS = [
   "**/package.json",
@@ -17,7 +17,7 @@ export const improvements: Generator = {
   id: "improvements",
   title: "Improvements",
   filename: "improvements.md",
-  async run(ctx, llm) {
+  async run(ctx, llm, depth) {
     const configFiles = await ctx.findFiles(SIGNAL_PATTERNS, 16);
     const sampleFiles = ctx.sampleSourceFiles(20);
     const signals = [...new Set([...configFiles, ...sampleFiles])];
@@ -47,9 +47,10 @@ Produce a short, prioritized doc — do NOT list everything, only what's worth a
 2. \`## Top improvements\` - a ranked checkbox list of the most impactful items (tech debt, testing gaps, risks, structure). One line each, name the files/areas it touches. Mark guesses as guesses.
 3. \`## Nice to have\` - a few smaller, optional items. Skip this section if there's nothing notable.
 
-Be concrete and grounded in the files. Don't invent problems.`;
+Be concrete and grounded in the files. Don't invent problems.
+${depthGuidance(depth)}`;
 
-    const content = await llm.complete({ system: SYSTEM_PROMPT, user, maxTokens: 1800 });
+    const content = await llm.complete({ system: SYSTEM_PROMPT, user, maxTokens: scaledTokens(1800, depth) });
     return { filename: "improvements.md", content, signals };
   },
 };

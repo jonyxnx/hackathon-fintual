@@ -67,6 +67,10 @@ jobs:
           # afterwards. Set this to "true" to force a full re-documentation.
           document-all: "false"
 
+          # Documentation depth, 1-10. 10 = scan the whole repo in detail,
+          # 5 = important things (default), 1 = a rough idea.
+          depth: "5"
+
           # Notion destination.
           notion-token: ${{ secrets.NOTION_TOKEN }}
           notion-page-id: ${{ secrets.NOTION_PAGE_ID }}

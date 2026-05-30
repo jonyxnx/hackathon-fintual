@@ -1,5 +1,5 @@
 import type { Generator } from "./index";
-import { SYSTEM_PROMPT, buildBroadContext, buildFileBlocks } from "./index";
+import { SYSTEM_PROMPT, buildBroadContext, buildFileBlocks, depthGuidance, scaledTokens } from "./index";
 
 const CANDIDATES = [
   "**/package.json",
@@ -20,7 +20,7 @@ export const setup: Generator = {
   id: "setup",
   title: "Setup",
   filename: "setup.md",
-  async run(ctx, llm) {
+  async run(ctx, llm, depth) {
     const found = await ctx.findFiles(CANDIDATES, 16);
     const signals = [...found];
 
@@ -46,9 +46,10 @@ Produce a short doc (only what's clearly supported; omit empty sections):
 3. \`## Install & run\` — the few commands to install and start it locally, from the real scripts/manifests.
 4. \`## Environment\` — only the env vars that must be set, briefly. Skip if none.
 
-Keep it tight: a developer should be able to skim it in under a minute.`;
+Keep it tight: a developer should be able to skim it in under a minute.
+${depthGuidance(depth)}`;
 
-    const content = await llm.complete({ system: SYSTEM_PROMPT, user, maxTokens: 1600 });
+    const content = await llm.complete({ system: SYSTEM_PROMPT, user, maxTokens: scaledTokens(1600, depth) });
     return { filename: "setup.md", content, signals };
   },
 };

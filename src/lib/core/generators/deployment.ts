@@ -1,5 +1,5 @@
 import type { Generator } from "./index";
-import { SYSTEM_PROMPT, buildBroadContext, buildFileBlocks } from "./index";
+import { SYSTEM_PROMPT, buildBroadContext, buildFileBlocks, depthGuidance, scaledTokens } from "./index";
 
 const PATTERN_GROUPS = [
   ["Dockerfile", "Dockerfile.*", "**/Dockerfile"],
@@ -21,7 +21,7 @@ export const deployment: Generator = {
   id: "deployment",
   title: "Deployment",
   filename: "deployment.md",
-  async run(ctx, llm) {
+  async run(ctx, llm, depth) {
     const found = new Set<string>();
     for (const group of PATTERN_GROUPS) {
       const matches = await ctx.glob(group as string[]);
@@ -58,9 +58,10 @@ Produce a short doc (only what's clearly configured; omit empty sections):
 3. \`## How to deploy\` — the key steps, grounded in the configs above.
 4. \`## Environment\` — the required env vars/secrets, briefly. Skip if none.
 
-Keep it tight and concrete. Don't invent platforms or commands.`;
+Keep it tight and concrete. Don't invent platforms or commands.
+${depthGuidance(depth)}`;
 
-    const content = await llm.complete({ system: SYSTEM_PROMPT, user, maxTokens: 1600 });
+    const content = await llm.complete({ system: SYSTEM_PROMPT, user, maxTokens: scaledTokens(1600, depth) });
     return { filename: "deployment.md", content, signals };
   },
 };

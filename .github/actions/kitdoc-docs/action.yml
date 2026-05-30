@@ -54,6 +54,10 @@ inputs:
     description: Force a full re-documentation of every folder. When false, kitdoc documents the whole repo on the first run (no AGENTS.md on the Notion page yet) and only the changed folders afterwards.
     required: false
     default: "false"
+  depth:
+    description: "Documentation depth from 1 to 10: 10 = scan the whole repo in detail, 5 = important things (default), 1 = a rough idea of what the repo does."
+    required: false
+    default: "5"
 
 runs:
   using: composite
@@ -96,7 +100,8 @@ runs:
             --all \
             --owner "${{ inputs.repo-owner }}" \
             --repo "${{ inputs.repo-name }}" \
-            --provider "${{ inputs.llm-provider }}"
+            --provider "${{ inputs.llm-provider }}" \
+            --depth "${{ inputs.depth }}"
         else
           npm run kitdoc -- \
             --dir "$TARGET_DIR" \
@@ -104,5 +109,6 @@ runs:
             --head "${{ inputs.head-sha }}" \
             --owner "${{ inputs.repo-owner }}" \
             --repo "${{ inputs.repo-name }}" \
-            --provider "${{ inputs.llm-provider }}"
+            --provider "${{ inputs.llm-provider }}" \
+            --depth "${{ inputs.depth }}"
         fi
