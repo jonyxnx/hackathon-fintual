@@ -1,9 +1,9 @@
 import { Octokit } from "@octokit/rest";
 import fg from "fast-glob";
-import simpleGit from "simple-git";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import * as tar from "tar";
 import type { ParsedRepo } from "./url";
 
 export interface RepoMetadata {
@@ -30,6 +30,34 @@ function makeOctokit() {
   });
 }
 
+function archiveDataToBuffer(data: unknown): Buffer {
+  if (Buffer.isBuffer(data)) return data;
+  if (data instanceof ArrayBuffer) return Buffer.from(data);
+  if (ArrayBuffer.isView(data)) {
+    return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+  }
+  if (typeof data === "string") return Buffer.from(data, "binary");
+  throw new Error("Unexpected GitHub archive response.");
+}
+
+async function downloadAndExtractTarball(
+  octokit: ReturnType<typeof makeOctokit>,
+  owner: string,
+  repo: string,
+  ref: string,
+  tempDir: string,
+): Promise<void> {
+  const response = await octokit.repos.downloadTarballArchive({ owner, repo, ref });
+  const archivePath = path.join(tempDir, "repo.tar.gz");
+  await writeFile(archivePath, archiveDataToBuffer(response.data));
+  await tar.x({
+    file: archivePath,
+    cwd: tempDir,
+    strip: 1,
+  });
+  await rm(archivePath, { force: true });
+}
+
 export async function fetchRepo(parsed: ParsedRepo): Promise<FetchedRepo> {
   const octokit = makeOctokit();
 
@@ -53,15 +81,10 @@ export async function fetchRepo(parsed: ParsedRepo): Promise<FetchedRepo> {
   const topics = (repoInfo.data.topics as string[] | undefined) ?? [];
 
   const tempDir = await mkdtemp(path.join(tmpdir(), "auto-doc-"));
-  const cloneUrl = process.env.GITHUB_TOKEN
-    ? `https://x-access-token:${process.env.GITHUB_TOKEN}@github.com/${parsed.owner}/${parsed.repo}.git`
-    : `https://github.com/${parsed.owner}/${parsed.repo}.git`;
-
-  const git = simpleGit();
   try {
-    await git.clone(cloneUrl, tempDir, ["--depth=1", `--branch=${ref}`]);
+    await downloadAndExtractTarball(octokit, parsed.owner, parsed.repo, ref, tempDir);
   } catch {
-    await git.clone(cloneUrl, tempDir, ["--depth=1"]);
+    await downloadAndExtractTarball(octokit, parsed.owner, parsed.repo, defaultBranch, tempDir);
   }
 
   const fileTree = await fg("**/*", {

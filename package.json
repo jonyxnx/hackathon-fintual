@@ -26,7 +26,8 @@
     "react-dom": "^19.0.0",
     "react-markdown": "^9.0.1",
     "remark-gfm": "^4.0.0",
-    "simple-git": "^3.27.0"
+    "simple-git": "^3.27.0",
+    "tar": "^7.5.15"
   },
   "devDependencies": {
     "@tailwindcss/typography": "^0.5.15",

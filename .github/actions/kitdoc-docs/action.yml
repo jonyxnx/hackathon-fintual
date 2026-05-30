@@ -43,7 +43,7 @@ inputs:
   llm-provider:
     description: LLM provider to use, either anthropic or openai.
     required: true
-    default: anthropic
+    default: openai
   anthropic-api-key:
     description: Anthropic API key, required when llm-provider is anthropic.
     required: false
