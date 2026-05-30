@@ -20,6 +20,9 @@ jobs:
   self-document:
     name: Document kitdoc with kitdoc
     runs-on: ubuntu-latest
+    # Secrets (OPENAI_API_KEY, NOTION_TOKEN, NOTION_PAGE_ID) live in the "main"
+    # GitHub Environment, so the job must opt into that environment to read them.
+    environment: main
 
     steps:
       - name: Checkout repo (for the local action)
