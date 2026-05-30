@@ -7,13 +7,11 @@ import { RepoContext } from "../lib/core/context";
 import { changedTopDirs } from "../lib/core/diff";
 import {
   generateAgentsDoc,
-  generateFolderAgentsDoc,
   type DocManifest,
-  type DocManifestEntry,
 } from "../lib/core/generators/agent";
 import { folderGenerator } from "../lib/core/generators/folder";
-import { generateFileDoc, isDocumentableFile } from "../lib/core/generators/file";
-import { AGENTS_ICON, REPO_ICON, iconForFile, iconForPath } from "../lib/core/icons";
+import { isDocumentableFile } from "../lib/core/generators/file";
+import { AGENTS_ICON, REPO_ICON, iconForPath } from "../lib/core/icons";
 import { getLLM, type LLMProvider, type ProviderName } from "../lib/core/llm";
 import { createNotionDocsFromEnv, type NotionDocs } from "../lib/core/notion";
 
@@ -26,10 +24,14 @@ interface CliOptions {
   provider?: ProviderName;
   all: boolean;
   dryRun: boolean;
-  maxFiles: number;
+  minFolderFiles: number;
 }
 
-const DEFAULT_MAX_FILES = 300;
+/** A folder needs at least this many documentable files (in its subtree) to get its own page. */
+const DEFAULT_MIN_FOLDER_FILES = 3;
+/** A folder this large (or with this many subfolders) gets a deeper, concern-split doc. */
+const BIG_FOLDER_FILES = 12;
+const BIG_FOLDER_SUBDIRS = 4;
 
 function usage(): string {
   return `Usage: kitdoc [options]
@@ -41,8 +43,8 @@ Options:
   --owner <owner>    Repository owner (default: parsed from origin remote)
   --repo <repo>      Repository name (default: parsed from origin remote)
   --provider <name>  LLM provider: anthropic or openai
-  --all              Document the whole repository (every folder and file)
-  --max-files <n>    Max number of per-file doc pages (default: ${DEFAULT_MAX_FILES})
+  --all              Document the whole repository (every significant folder)
+  --min-folder-files <n>  Min documentable files for a folder to get its own page (default: ${DEFAULT_MIN_FOLDER_FILES})
   --dry-run          Print generated markdown instead of syncing to Notion
   --help             Show this help message`;
 }
@@ -65,7 +67,7 @@ function parseArgs(argv: string[]): CliOptions {
     dir: process.cwd(),
     all: false,
     dryRun: false,
-    maxFiles: DEFAULT_MAX_FILES,
+    minFolderFiles: DEFAULT_MIN_FOLDER_FILES,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -98,13 +100,13 @@ function parseArgs(argv: string[]): CliOptions {
       case "--all":
         opts.all = true;
         break;
-      case "--max-files": {
+      case "--min-folder-files": {
         const raw = readValue(argv, i, arg);
         const parsed = Number.parseInt(raw, 10);
-        if (!Number.isFinite(parsed) || parsed < 0) {
-          throw new Error(`--max-files requires a non-negative integer, got: ${raw}`);
+        if (!Number.isFinite(parsed) || parsed < 1) {
+          throw new Error(`--min-folder-files requires a positive integer, got: ${raw}`);
         }
-        opts.maxFiles = parsed;
+        opts.minFolderFiles = parsed;
         i++;
         break;
       }
@@ -208,47 +210,46 @@ interface WalkState {
   llm: LLMProvider;
   sink: DocSink;
   manifest: DocManifest;
-  remainingFiles: number;
+  minFolderFiles: number;
 }
 
-async function documentFolder(node: DirNode, parentPageId: string, state: WalkState): Promise<void> {
-  const { ctx, llm, sink } = state;
-  const icon = iconForPath(node.path);
-
-  console.log(`Generating folder doc: ${node.path}`);
-  const folderDoc = await folderGenerator(node.path).run(ctx, llm);
-  const folderPageId = await sink.upsert(parentPageId, node.name, folderDoc.content, icon, node.path);
-  state.manifest.documented.push({ path: node.path, kind: "folder" });
-
-  const folderAgents = await generateFolderAgentsDoc(node.path, ctx, llm);
-  await sink.upsert(folderPageId, "AGENTS.md", folderAgents.content, AGENTS_ICON, `${node.path}/AGENTS.md`);
-
-  await documentFilesAndSubdirs(node, folderPageId, state);
+function countDocumentableFiles(node: DirNode): number {
+  let total = node.files.filter(isDocumentableFile).length;
+  for (const child of node.dirs.values()) total += countDocumentableFiles(child);
+  return total;
 }
 
-async function documentFilesAndSubdirs(node: DirNode, pageId: string, state: WalkState): Promise<void> {
-  const { ctx, llm, sink } = state;
+/** A folder earns its own page when its subtree has enough documentable files. */
+function isSignificant(node: DirNode, minFiles: number): boolean {
+  return countDocumentableFiles(node) >= minFiles;
+}
 
-  for (const file of node.files.sort()) {
-    if (!isDocumentableFile(file)) {
-      state.manifest.skipped.push(file);
+/** Large or multi-concern folders get a deeper, concern-split doc. */
+function isBig(node: DirNode): boolean {
+  return countDocumentableFiles(node) >= BIG_FOLDER_FILES || node.dirs.size >= BIG_FOLDER_SUBDIRS;
+}
+
+async function documentChildren(node: DirNode, parentPageId: string, state: WalkState): Promise<void> {
+  const children = [...node.dirs.values()].sort((a, b) => a.name.localeCompare(b.name));
+
+  for (const child of children) {
+    if (!isSignificant(child, state.minFolderFiles)) {
+      // Too small for its own page: fold it in by attaching any significant
+      // descendants to this same parent. Its files are still covered by the
+      // nearest documented ancestor's folder doc.
+      state.manifest.skipped.push(child.path);
+      await documentChildren(child, parentPageId, state);
       continue;
     }
-    if (state.remainingFiles <= 0) {
-      state.manifest.skipped.push(file);
-      continue;
-    }
-    state.remainingFiles -= 1;
 
-    console.log(`Generating file doc: ${file}`);
-    const fileDoc = await generateFileDoc(file, ctx, llm);
-    const title = file.split("/").pop() ?? file;
-    await sink.upsert(pageId, title, fileDoc.content, iconForFile(file), file);
-    state.manifest.documented.push({ path: file, kind: "file" });
-  }
+    const deep = isBig(child);
+    const icon = iconForPath(child.path);
+    console.log(`Generating folder doc: ${child.path}${deep ? " (deep)" : ""}`);
+    const folderDoc = await folderGenerator(child.path, { deep }).run(state.ctx, state.llm);
+    const folderPageId = await state.sink.upsert(parentPageId, child.name, folderDoc.content, icon, child.path);
+    state.manifest.documented.push({ path: child.path, kind: "folder" });
 
-  for (const child of [...node.dirs.values()].sort((a, b) => a.name.localeCompare(b.name))) {
-    await documentFolder(child, pageId, state);
+    await documentChildren(child, folderPageId, state);
   }
 }
 
@@ -288,20 +289,20 @@ async function main(): Promise<void> {
     llm,
     sink,
     manifest: { documented: [], skipped: [] },
-    remainingFiles: opts.maxFiles,
+    minFolderFiles: opts.minFolderFiles,
   };
 
-  // For --all, document the whole repo (every folder + file, including root files).
-  // For changed mode, restrict to the changed top-level folders.
+  // For --all, document the whole repo. For changed mode, restrict to the
+  // changed top-level folders. Each significant folder gets its own nested page;
+  // small folders are folded into their nearest documented ancestor.
   const tree = buildTree(ctx.fileTree, changedRoots ?? undefined);
-  const hasContent = tree.files.length > 0 || tree.dirs.size > 0;
 
-  if (!hasContent) {
-    console.log("No files or folders to document.");
+  if (tree.dirs.size === 0) {
+    console.log("No folders to document.");
   } else {
     const scope = opts.all ? "whole repository" : `changed folders: ${(changedRoots ?? []).join(", ")}`;
-    console.log(`Documenting ${scope} (every folder and file, page-in-page).`);
-    await documentFilesAndSubdirs(tree, repoPageId, state);
+    console.log(`Documenting ${scope} (one doc per significant folder, page-in-page).`);
+    await documentChildren(tree, repoPageId, state);
   }
 
   // AGENTS.md is generated LAST so it can index everything that was produced and
@@ -310,10 +311,8 @@ async function main(): Promise<void> {
   const agentsDoc = await generateAgentsDoc(ctx, llm, state.manifest);
   await sink.upsert(repoPageId, "AGENTS.md", agentsDoc.content, AGENTS_ICON, "AGENTS.md");
 
-  const docCount = state.manifest.documented.length;
-  const fileCount = state.manifest.documented.filter((e: DocManifestEntry) => e.kind === "file").length;
   console.log(
-    `Done. Documented ${docCount} pages (${fileCount} files), skipped ${state.manifest.skipped.length} files.`,
+    `Done. Documented ${state.manifest.documented.length} folder(s), folded ${state.manifest.skipped.length} small folder(s).`,
   );
 }
 

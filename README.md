@@ -43,9 +43,9 @@ This repo includes a reusable GitHub Action that documents a repository and sync
 
 For each run it creates a repo page and, beneath it, a page-in-page hierarchy that mirrors the codebase:
 
-- A folder page for every directory (with a usage-based emoji icon), containing its own `AGENTS.md`.
-- A page for every documentable file, nested under its folder page, with summary, key contents, what to change, fast-lookup tips, dependencies, and gotchas.
-- A root `AGENTS.md` that acts as the documentation index and coverage report: it lists what has been documented, flags gaps, and recommends what is still missing.
+- One doc per folder, but only for folders substantial enough to warrant it (a usage-based emoji icon is set per folder). Small folders are folded into their nearest documented parent's doc.
+- Large or multi-concern folders get a deeper doc that breaks the folder down by concern.
+- A root `AGENTS.md` that acts as the documentation index and coverage report: it lists which folders were documented, which were folded in, and recommends what is still missing or should be expanded.
 
 Pull-request runs document the changed top-level folders; the self-doc workflow uses `document-all: "true"` to document the entire repository.
 
@@ -95,4 +95,4 @@ jobs:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
 ```
 
-The action checks out the target repository with full git history, checks out the kitdoc repository separately, runs `npm ci` for kitdoc, and runs the CLI against the target checkout. It documents every folder and file as a nested page tree, then generates the root `AGENTS.md` index + coverage report last so it can reflect everything that was produced. Per-file pages are capped by `--max-files` (default 300).
+The action checks out the target repository with full git history, checks out the kitdoc repository separately, runs `npm ci` for kitdoc, and runs the CLI against the target checkout. It documents each significant folder as a nested page, then generates the root `AGENTS.md` index + coverage report last so it can reflect everything that was produced. The folder-significance threshold is controlled by `--min-folder-files` (default 3).

@@ -73,8 +73,14 @@ function directSubdirs(files: string[], folder: string): string[] {
   return [...set].sort();
 }
 
-export function folderGenerator(folder: string): Generator {
+export interface FolderGeneratorOptions {
+  /** When true, produce a deeper doc that breaks the folder down by concern. */
+  deep?: boolean;
+}
+
+export function folderGenerator(folder: string, opts: FolderGeneratorOptions = {}): Generator {
   const normalizedFolder = normalizeFolder(folder);
+  const deep = opts.deep ?? false;
 
   return {
     id: `folder:${normalizedFolder}`,
@@ -91,13 +97,22 @@ export function folderGenerator(folder: string): Generator {
         };
       }
 
-      const sampleFiles = pickRepresentativeFiles(files);
+      const sampleLimit = deep ? SAMPLE_LIMIT + 12 : SAMPLE_LIMIT;
+      const sampleFiles = pickRepresentativeFiles(files).slice(0, sampleLimit);
       const fileBlocks = await buildFileBlocks(ctx, sampleFiles, 14 * 1024);
       const subdirs = directSubdirs(files, normalizedFolder);
 
-      const user = `Write deep, internal documentation for the \`${normalizedFolder}\` folder in \`${ctx.owner}/${ctx.repo}\`.
+      const deepSection = deep
+        ? `
 
-This folder contains ${files.length} files across ${subdirs.length} immediate subfolders. Be thorough and specific: a developer should be able to work here without opening every file.
+This is a large, multi-concern folder. In addition to the sections above:
+- \`## Concerns breakdown\` - identify the distinct responsibilities/concerns living in this folder and which files belong to each. If a concern is large enough to deserve its own document, call it out.
+- Go deeper on each major file or module rather than summarizing at a high level.`
+        : "";
+
+      const user = `Write ${deep ? "deep, thorough" : "focused"} internal documentation for the \`${normalizedFolder}\` folder in \`${ctx.owner}/${ctx.repo}\`.
+
+This folder contains ${files.length} files across ${subdirs.length} immediate subfolders. Be specific: a developer should be able to work here without opening every file. Smaller subfolders that do not have their own page are documented here as part of this folder.
 
 Immediate subfolders: ${subdirs.length ? subdirs.join(", ") : "(none)"}
 
@@ -119,9 +134,9 @@ Produce internal folder documentation:
 6. \`## Connections\` - imports from and exports to the rest of the repo, plus external libraries used here.
 7. \`## Change map\` - common tasks (add/modify/remove behavior) mapped to the exact files to open first.
 8. \`## Fast lookup\` - which symbols to search and which files to read first for the most common questions about this folder.
-9. \`## Agent notes\` - practical cautions, verification hints, and unknowns that should be checked before editing.`;
+9. \`## Agent notes\` - practical cautions, verification hints, and unknowns that should be checked before editing.${deepSection}`;
 
-      const content = await llm.complete({ system: SYSTEM_PROMPT, user, maxTokens: 5500 });
+      const content = await llm.complete({ system: SYSTEM_PROMPT, user, maxTokens: deep ? 6500 : 4500 });
       return { filename: `${normalizedFolder}.md`, content, signals: sampleFiles };
     },
   };
