@@ -6,49 +6,61 @@ export interface GeneratorMeta {
   detects: string[];
 }
 
+/** Canonical six-part project documentation scope (matches product copy). */
+export const DOC_PACK_SECTIONS = [
+  "overview",
+  "setup",
+  "testing",
+  "deployment",
+  "conventions",
+  "migrations",
+] as const;
+
+export type DocPackSectionId = (typeof DOC_PACK_SECTIONS)[number];
+
 export const GENERATOR_CATALOG: GeneratorMeta[] = [
   {
     id: "overview",
     title: "Overview",
     filename: "overview.md",
     description:
-      "What the project does, the tech stack, and how the repo is laid out.",
+      "What the project does, the tech stack, repo layout, entry points, and how pieces fit together.",
     detects: ["README.md", "package.json", "pyproject.toml", "language stats"],
   },
   {
-    id: "code-standards",
-    title: "Code standards",
-    filename: "code-standards.md",
-    description: "Linting, formatting, and language conventions in the codebase.",
-    detects: [".eslintrc*", ".prettierrc*", "tsconfig.json", ".editorconfig", "biome.json"],
-  },
-  {
-    id: "deployments",
-    title: "Deployments",
-    filename: "deployments.md",
-    description: "Hosting platforms, CI/CD workflows, containers, env vars.",
-    detects: ["Dockerfile", ".github/workflows/*", "vercel.json", "render.yaml", "fly.toml"],
-  },
-  {
-    id: "migrations",
-    title: "Database & migrations",
-    filename: "migrations.md",
-    description: "ORM in use, schema models, and how to create + apply migrations.",
-    detects: ["prisma/schema.prisma", "drizzle.config", "alembic.ini", "migrations/"],
+    id: "setup",
+    title: "Setup",
+    filename: "setup.md",
+    description: "Prerequisites, install, environment variables, local run, and first-change workflow.",
+    detects: ["package.json scripts", ".env.example", "Makefile", "README install"],
   },
   {
     id: "testing",
-    title: "Testing & quality",
+    title: "Testing",
     filename: "testing.md",
-    description: "Test frameworks, how to run tests, and where they live.",
+    description: "Test frameworks, how to run tests, test layout, coverage, and quality gates.",
     detects: ["jest.config*", "vitest.config*", "pytest.ini", "playwright.config*", "__tests__/"],
   },
   {
-    id: "getting-started",
-    title: "Getting started",
-    filename: "getting-started.md",
-    description: "Prerequisites, install, env vars, dev server, useful scripts.",
-    detects: ["package.json scripts", ".env.example", "Makefile", "README install"],
+    id: "deployment",
+    title: "Deployment",
+    filename: "deployment.md",
+    description: "Hosting platforms, CI/CD workflows, containers, runtime shape, and env vars.",
+    detects: ["Dockerfile", ".github/workflows/*", "vercel.json", "render.yaml", "fly.toml"],
+  },
+  {
+    id: "conventions",
+    title: "Conventions",
+    filename: "conventions.md",
+    description: "Linting, formatting, language settings, and coding patterns to follow in this repo.",
+    detects: [".eslintrc*", ".prettierrc*", "tsconfig.json", ".editorconfig", "biome.json"],
+  },
+  {
+    id: "migrations",
+    title: "Migrations",
+    filename: "migrations.md",
+    description: "ORM in use, schema overview, and how to create and apply database migrations.",
+    detects: ["prisma/schema.prisma", "drizzle.config", "alembic.ini", "migrations/"],
   },
 ];
 

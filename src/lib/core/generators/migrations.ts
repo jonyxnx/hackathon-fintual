@@ -1,5 +1,5 @@
 import type { Generator } from "./index";
-import { SYSTEM_PROMPT, buildFileBlocks, notDetectedStub } from "./index";
+import { SYSTEM_PROMPT, buildBroadContext, buildFileBlocks } from "./index";
 
 const SIGNAL_PATTERNS = [
   "**/prisma/schema.prisma",
@@ -27,7 +27,7 @@ const FOLDER_PATTERNS = [
 
 export const migrations: Generator = {
   id: "migrations",
-  title: "Database & migrations",
+  title: "Migrations",
   filename: "migrations.md",
   async run(ctx, llm) {
     const found = new Set<string>();
@@ -40,39 +40,43 @@ export const migrations: Generator = {
     }
 
     const foundList = [...found].slice(0, 15);
-    if (foundList.length === 0) {
-      return {
-        filename: "migrations.md",
-        content: notDetectedStub("Database & migrations", [...SIGNAL_PATTERNS, ...FOLDER_PATTERNS]),
-        signals: [],
-      };
-    }
+    const signals = [...foundList];
 
     const filesToRead = [
       ...[...found].filter((p) => !sampleMigrations.includes(p)),
       ...sampleMigrations.slice(0, 3),
     ];
-    const fileBlocks = await buildFileBlocks(ctx, filesToRead, 12 * 1024);
+    let fileBlocks = filesToRead.length > 0 ? await buildFileBlocks(ctx, filesToRead, 12 * 1024) : "";
+    if (!fileBlocks) {
+      const fallback = await buildBroadContext(ctx);
+      fileBlocks = [
+        "_No dedicated database or migration files were detected. Use README/manifest hints and state unknowns explicitly._",
+        "",
+        fallback.blocks,
+      ].join("\n");
+      signals.push(...fallback.paths);
+    }
 
-    const user = `Write the **Database & migrations** documentation for \`${ctx.owner}/${ctx.repo}\`.
+    const user = `Write the **Migrations** documentation for \`${ctx.owner}/${ctx.repo}\`.
 
 Detected files:
-${foundList.map((f) => "- `" + f + "`").join("\n")}
+${foundList.length ? foundList.map((f) => "- `" + f + "`").join("\n") : "- none"}
 
 Contents of key files:
 
 ${fileBlocks}
 
-Produce internal database guidance:
-1. \`# Database & migrations\` heading.
+Produce comprehensive internal database guidance. Cover every subsection below; when evidence is missing, say so explicitly instead of inventing ORMs or commands.
+1. \`# Migrations\` heading.
 2. \`## ORM / tooling\` — which ORM and migration tool (Prisma, Drizzle, Alembic, etc.).
 3. \`## Schema overview\` — the main models/tables visible in schema or migrations, with short descriptions grounded in names/fields.
 4. \`## How migrations work\` — where migrations live, naming/versioning pattern, and workflow to create/apply them for this stack.
 5. \`## Local development workflow\` — how a developer should prepare, migrate, reset, seed, or inspect the database when commands/configs are visible.
 6. \`## Common commands\` — concrete CLI commands a developer would run (e.g., \`npx prisma migrate dev\`).
-7. \`## Change safety\` — cautions for schema changes, destructive operations, generated clients, and deployment ordering visible from files.`;
+7. \`## Change safety\` — cautions for schema changes, destructive operations, generated clients, and deployment ordering visible from files.
+8. \`## Agent notes\` — what a coding agent should verify before editing schema, migration, or database access code.`;
 
-    const content = await llm.complete({ system: SYSTEM_PROMPT, user, maxTokens: 4000 });
-    return { filename: "migrations.md", content, signals: foundList };
+    const content = await llm.complete({ system: SYSTEM_PROMPT, user, maxTokens: 4500 });
+    return { filename: "migrations.md", content, signals };
   },
 };

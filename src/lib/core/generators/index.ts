@@ -1,11 +1,12 @@
 import type { RepoContext } from "../context";
 import type { LLMProvider } from "../llm";
+import { DOC_PACK_SECTIONS } from "../catalog";
 import { overview } from "./overview";
-import { codeStandards } from "./codeStandards";
-import { deployments } from "./deployments";
-import { migrations } from "./migrations";
+import { setup } from "./setup";
 import { testing } from "./testing";
-import { gettingStarted } from "./gettingStarted";
+import { deployment } from "./deployment";
+import { conventions } from "./conventions";
+import { migrations } from "./migrations";
 
 export interface GeneratorResult {
   filename: string;
@@ -22,17 +23,35 @@ export interface Generator {
 
 export const ALL_GENERATORS: Generator[] = [
   overview,
-  codeStandards,
-  deployments,
-  migrations,
+  setup,
   testing,
-  gettingStarted,
+  deployment,
+  conventions,
+  migrations,
 ];
 
 export function getGenerators(ids?: string[]): Generator[] {
   if (!ids || ids.length === 0) return ALL_GENERATORS;
   const set = new Set(ids);
   return ALL_GENERATORS.filter((g) => set.has(g.id));
+}
+
+const FALLBACK_CONTEXT_PATTERNS = [
+  "**/README.md",
+  "**/readme.md",
+  "**/package.json",
+  "**/pyproject.toml",
+  "**/Makefile",
+  "**/go.mod",
+];
+
+export async function buildBroadContext(
+  ctx: RepoContext,
+  maxFiles = 6,
+): Promise<{ blocks: string; paths: string[] }> {
+  const paths = await ctx.findFiles(FALLBACK_CONTEXT_PATTERNS, maxFiles);
+  const blocks = await buildFileBlocks(ctx, paths, 12 * 1024);
+  return { blocks, paths };
 }
 
 export async function buildFileBlocks(
@@ -62,7 +81,8 @@ Rules:
 - Include relationships between files and systems when the evidence supports them.
 - Prefer actionable guidance over generic explanation.
 - Do not add source-footers such as "Generated from" or explain where the information came from.
-- When you reference a file, use backticks and its repo-relative path.`;
+- When you reference a file, use backticks and its repo-relative path.
+- Each doc is one section of full project documentation (${DOC_PACK_SECTIONS.join(", ")}). Cover the full requested scope for that section even when evidence is sparse.`;
 
 export function notDetectedStub(title: string, _looked: string[]): string {
   return [

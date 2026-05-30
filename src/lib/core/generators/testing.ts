@@ -1,5 +1,5 @@
 import type { Generator } from "./index";
-import { SYSTEM_PROMPT, buildFileBlocks, notDetectedStub } from "./index";
+import { SYSTEM_PROMPT, buildBroadContext, buildFileBlocks } from "./index";
 
 const CONFIG_PATTERNS = [
   "**/jest.config.{js,ts,mjs,cjs}",
@@ -28,7 +28,7 @@ const TEST_GLOBS = [
 
 export const testing: Generator = {
   id: "testing",
-  title: "Testing & quality",
+  title: "Testing",
   filename: "testing.md",
   async run(ctx, llm) {
     const configs = await ctx.findFiles(CONFIG_PATTERNS, 12);
@@ -55,36 +55,36 @@ export const testing: Generator = {
       }
     }
 
-    if (configs.length === 0 && testFileCount === 0 && testScripts.length === 0) {
-      return {
-        filename: "testing.md",
-        content: notDetectedStub("Testing & quality", [...CONFIG_PATTERNS, ...TEST_GLOBS]),
-        signals: [],
-      };
+    const signals = [...configs, ...packageFiles, ...sampleTests];
+    const dedicatedSignals = configs.length > 0 || testFileCount > 0 || testScripts.length > 0;
+
+    let fileBlocks = await buildFileBlocks(ctx, [...configs, ...packageFiles, ...sampleTests], 8 * 1024);
+    if (!fileBlocks) {
+      const fallback = await buildBroadContext(ctx);
+      fileBlocks = fallback.blocks;
+      signals.push(...fallback.paths);
     }
 
-    const fileBlocks = await buildFileBlocks(ctx, [...configs, ...packageFiles, ...sampleTests], 8 * 1024);
-    const signals = [...configs, ...packageFiles, ...sampleTests];
-
-    const user = `Write the **Testing & quality** documentation for \`${ctx.owner}/${ctx.repo}\`.
+    const user = `Write the **Testing** documentation for \`${ctx.owner}/${ctx.repo}\`.
 
 Detected:
 - Test config files: ${configs.length ? configs.join(", ") : "none"}
 - Approx test files found: ${testFileCount}
 - Sample tests: ${sampleTests.join(", ") || "none"}
-- quality-related scripts: ${testScripts.join(" | ") || "none"}
+- Quality-related scripts: ${testScripts.join(" | ") || "none"}
+- Dedicated testing signals found: ${dedicatedSignals ? "yes" : "no — rely on README/manifest hints and state unknowns explicitly"}
 
 File contents:
 
 ${fileBlocks || "(none — rely on scripts/counts above)"}
 
-Produce internal testing guidance:
-1. \`# Testing & quality\` heading.
+Produce comprehensive internal testing guidance. Cover every subsection below; when evidence is missing, say so explicitly instead of inventing frameworks or commands.
+1. \`# Testing\` heading.
 2. \`## Test frameworks\` — what's used (Jest, Vitest, Playwright, pytest, etc.).
 3. \`## How to run tests\` — concrete commands grounded in the scripts/configs above, including targeted vs full-suite commands when visible.
 4. \`## Test structure\` — where tests live, naming convention, and what sample tests reveal about style.
 5. \`## What to test when changing code\` — practical guidance for a new developer or coding agent based on detected files.
-6. \`## Coverage & CI\` — only if visible from configs / scripts.
+6. \`## Coverage & CI\` — only if visible from configs / scripts; otherwise note that coverage/CI testing is unknown.
 7. \`## Quality gates\` — lint/typecheck/build/test commands a developer should run before handing off work.
 8. \`## Agent notes\` — what a coding agent should verify after modifying app code, configuration, database code, or deployment files.`;
 

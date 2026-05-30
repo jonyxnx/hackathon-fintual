@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ProviderSelect } from "@/components/ProviderSelect";
 
 interface Props {
   disabled: boolean;
@@ -32,16 +33,7 @@ export function UrlForm({ disabled, onSubmit }: Props) {
             className="min-w-0 flex-1 bg-transparent py-3 font-mono text-sm text-stone-900 outline-none placeholder:text-stone-400"
           />
         </label>
-        <select
-          value={provider}
-          onChange={(e) => setProvider(e.target.value as "anthropic" | "openai")}
-          disabled={disabled}
-          aria-label="LLM provider"
-          className="rounded-2xl border border-stone-300 bg-[#fffdf7] px-4 py-3 font-mono text-sm text-stone-700 shadow-sm hover:border-stone-400 disabled:text-stone-400"
-        >
-          <option value="anthropic">Claude</option>
-          <option value="openai">GPT</option>
-        </select>
+        <ProviderSelect value={provider} onChange={setProvider} disabled={disabled} />
         <button
           type="submit"
           disabled={disabled || !url.trim()}

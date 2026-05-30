@@ -1,0 +1,76 @@
+name: kitdoc CI example (self-doc)
+
+# Example workflow: kitdoc documents its own repository and syncs the docs
+# to Notion. Mirror this in any project repo to get the same flow.
+#
+# Required repo secrets:
+#   NOTION_TOKEN     - Notion integration token with edit access to the page
+#   NOTION_PAGE_ID   - Parent Notion page ID where docs are written
+#   OPENAI_API_KEY   - OpenAI API key (this example uses provider=openai)
+#
+# Triggers:
+#   - workflow_dispatch: run on demand from the GitHub Actions UI
+#   - push to main:      auto-update docs whenever main moves
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_sha:
+        description: "Base commit SHA (defaults to HEAD~1)"
+        required: false
+      head_sha:
+        description: "Head commit SHA (defaults to HEAD)"
+        required: false
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  self-document:
+    name: Document kitdoc with kitdoc
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo (for the local action)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Resolve base / head SHAs
+        id: shas
+        shell: bash
+        run: |
+          BASE="${{ github.event.inputs.base_sha || github.event.before }}"
+          HEAD="${{ github.event.inputs.head_sha || github.sha }}"
+          # First push to a branch reports an all-zero `before` SHA. Fall back to HEAD~1.
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            BASE=$(git rev-parse "${HEAD}^" 2>/dev/null || echo "$HEAD")
+          fi
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "head=$HEAD" >> "$GITHUB_OUTPUT"
+          echo "Using base=$BASE head=$HEAD"
+
+      - name: Run kitdoc against this repo and sync to Notion
+        uses: ./.github/actions/kitdoc-docs
+        with:
+          # Document this repo using this repo's own kitdoc CLI.
+          target-repository: ${{ github.repository }}
+          target-ref: ${{ steps.shas.outputs.head }}
+          kitdoc-repository: ${{ github.repository }}
+          kitdoc-ref: ${{ github.sha }}
+
+          base-sha: ${{ steps.shas.outputs.base }}
+          head-sha: ${{ steps.shas.outputs.head }}
+          repo-owner: ${{ github.repository_owner }}
+          repo-name: ${{ github.event.repository.name }}
+
+          # Use OpenAI for the LLM in this example.
+          llm-provider: openai # anthropic
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+
+          # Notion destination.
+          notion-token: ${{ secrets.NOTION_TOKEN }}
+          notion-page-id: ${{ secrets.NOTION_PAGE_ID }}

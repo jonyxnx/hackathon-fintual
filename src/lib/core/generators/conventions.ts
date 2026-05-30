@@ -1,5 +1,5 @@
 import type { Generator } from "./index";
-import { SYSTEM_PROMPT, buildFileBlocks, notDetectedStub } from "./index";
+import { SYSTEM_PROMPT, buildBroadContext, buildFileBlocks } from "./index";
 
 const CONFIG_PATTERNS = [
   "**/.eslintrc",
@@ -23,28 +23,25 @@ const CONFIG_PATTERNS = [
   "**/package.json",
 ];
 
-export const codeStandards: Generator = {
-  id: "code-standards",
-  title: "Code standards",
-  filename: "code-standards.md",
+export const conventions: Generator = {
+  id: "conventions",
+  title: "Conventions",
+  filename: "conventions.md",
   async run(ctx, llm) {
     const configFiles = await ctx.findFiles(CONFIG_PATTERNS, 20);
     const sampleFiles = ctx.sampleSourceFiles(16);
     const signals = [...configFiles, ...sampleFiles];
 
-    if (signals.length === 0) {
-      return {
-        filename: "code-standards.md",
-        content: notDetectedStub("Code standards", CONFIG_PATTERNS),
-        signals: [],
-      };
+    let fileBlocks = await buildFileBlocks(ctx, signals, 12 * 1024);
+    if (!fileBlocks) {
+      const fallback = await buildBroadContext(ctx);
+      fileBlocks = fallback.blocks;
+      signals.push(...fallback.paths);
     }
 
-    const fileBlocks = await buildFileBlocks(ctx, signals, 12 * 1024);
+    const user = `Write the **Conventions** documentation for \`${ctx.owner}/${ctx.repo}\`.
 
-    const user = `Write the **Code standards** documentation for \`${ctx.owner}/${ctx.repo}\`.
-
-The repository was explored from the cloned checkout. Use both explicit tooling config and representative source files.
+The repository was explored from the cloned checkout. Use explicit tooling config and representative source files when available.
 
 Detected config files:
 ${configFiles.map((f) => "- `" + f + "`").join("\n") || "- none"}
@@ -54,17 +51,18 @@ ${sampleFiles.map((f) => "- `" + f + "`").join("\n") || "- none"}
 
 ${fileBlocks}
 
-Produce internal engineering guidance:
-1. \`# Code standards\` heading.
+Produce comprehensive internal engineering guidance. Cover every subsection below; infer cautiously from sampled code when config is absent.
+1. \`# Conventions\` heading.
 2. \`## Tooling\` — linters, formatters, compilers, package scripts, and where they are configured.
-3. \`## Formatting\` — indentation, quotes, semicolons, trailing commas, import style, naming, component/function style, etc. Prefer explicit config; otherwise infer cautiously from sampled code.
+3. \`## Formatting\` — indentation, quotes, semicolons, trailing commas, import style, naming, and component/function style.
 4. \`## Language / compiler settings\` — TypeScript strict flags, Python version, lint targets, etc. (only what's visible).
-5. \`## Code patterns observed\` — patterns from sampled source files: module boundaries, component/function style, error handling, async/data flow, naming, and file organization.
+5. \`## Code patterns observed\` — module boundaries, component/function style, error handling, async/data flow, naming, and file organization.
 6. \`## Conventions to follow\` — actionable bullets for a new developer or coding agent making changes in this repo.
 7. \`## Review checklist\` — concrete checks a reviewer or coding agent should apply before handing off changes.
-8. \`## Things to avoid\` — risky changes or style mismatches that would conflict with the observed codebase.`;
+8. \`## Things to avoid\` — risky changes or style mismatches that would conflict with the observed codebase.
+9. \`## Agent notes\` — how a coding agent should match existing style when editing unfamiliar files.`;
 
     const content = await llm.complete({ system: SYSTEM_PROMPT, user, maxTokens: 5000 });
-    return { filename: "code-standards.md", content, signals };
+    return { filename: "conventions.md", content, signals };
   },
 };
