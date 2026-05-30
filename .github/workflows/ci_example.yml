@@ -16,24 +16,30 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: kitdoc-self-doc-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   self-document:
     name: Document kitdoc with kitdoc
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     # Secrets (OPENAI_API_KEY, NOTION_TOKEN, NOTION_PAGE_ID) live in the "main"
     # GitHub Environment, so the job must opt into that environment to read them.
     environment: main
 
     steps:
-      - name: Checkout repo (for the local action)
-        uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364edaf087 # v4.2.2
         with:
-          fetch-depth: 2
+          fetch-depth: 64
 
       - name: Resolve base / head SHAs
         id: shas
         shell: bash
         run: |
+          set -euo pipefail
           BASE="${{ github.event.inputs.base_sha || github.event.before }}"
           HEAD="${{ github.event.inputs.head_sha || github.sha }}"
           # First push to a branch reports an all-zero `before` SHA. Fall back to HEAD~1.
@@ -47,30 +53,22 @@ jobs:
       - name: Run kitdoc against this repo and sync to Notion
         uses: ./.github/actions/kitdoc-docs
         with:
-          # Document this repo using this repo's own kitdoc CLI.
           target-repository: ${{ github.repository }}
           target-ref: ${{ steps.shas.outputs.head }}
           kitdoc-repository: ${{ github.repository }}
           kitdoc-ref: ${{ github.sha }}
-
           base-sha: ${{ steps.shas.outputs.base }}
           head-sha: ${{ steps.shas.outputs.head }}
           repo-owner: ${{ github.repository_owner }}
           repo-name: ${{ github.event.repository.name }}
-
-          # Use OpenAI for the LLM in this example.
-          llm-provider: openai # anthropic
+          target-path: .
+          kitdoc-path: .
+          skip-target-checkout: "true"
+          skip-kitdoc-checkout: "true"
+          llm-provider: openai
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-
-          # Let kitdoc decide: it documents the whole repo on the first run (no
-          # AGENTS.md on the Notion page yet) and only refreshes changed areas
-          # afterwards. Set this to "true" to force a full re-documentation.
           document-all: "false"
-
-          # Documentation depth, 1-10. 10 = scan the whole repo in detail,
-          # 5 = important things (default), 1 = a rough idea.
           depth: "5"
-
-          # Notion destination.
+          doc-concurrency: "4"
           notion-token: ${{ secrets.NOTION_TOKEN }}
           notion-page-id: ${{ secrets.NOTION_PAGE_ID }}

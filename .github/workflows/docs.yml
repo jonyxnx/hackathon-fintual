@@ -9,14 +9,22 @@ permissions:
   contents: read
   pull-requests: read
 
+concurrency:
+  group: kitdoc-docs-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   notion-docs:
     name: Sync changed-folder docs
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Fork PRs do not receive repository secrets. This workflow only syncs docs
+    # for pull requests opened from branches in this repository.
+    if: github.event.pull_request.head.repo.full_name == github.repository
 
     steps:
       - name: Checkout kitdoc action source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364edaf087 # v4.2.2
 
       - name: Generate Notion docs
         uses: ./.github/actions/kitdoc-docs
@@ -29,8 +37,11 @@ jobs:
           repo-name: ${{ github.event.repository.name }}
           kitdoc-repository: ${{ github.repository }}
           kitdoc-ref: ${{ github.sha }}
-          notion-token: ${{ secrets.NOTION_TOKEN }}
-          notion-page-id: ${{ secrets.NOTION_PAGE_ID }}
+          skip-kitdoc-checkout: "true"
+          kitdoc-path: .
           llm-provider: ${{ vars.LLM_PROVIDER || 'openai' }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          doc-concurrency: "4"
+          notion-token: ${{ secrets.NOTION_TOKEN }}
+          notion-page-id: ${{ secrets.NOTION_PAGE_ID }}

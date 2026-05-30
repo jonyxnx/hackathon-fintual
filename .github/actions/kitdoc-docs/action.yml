@@ -34,6 +34,14 @@ inputs:
     description: Workspace-relative checkout path for the kitdoc CLI repository.
     required: true
     default: kitdoc
+  skip-target-checkout:
+    description: Skip target checkout when the repository is already present at target-path.
+    required: false
+    default: "false"
+  skip-kitdoc-checkout:
+    description: Skip kitdoc checkout when the CLI is already present at kitdoc-path.
+    required: false
+    default: "false"
   notion-token:
     description: Notion integration token.
     required: true
@@ -50,6 +58,10 @@ inputs:
   openai-api-key:
     description: OpenAI API key, required when llm-provider is openai.
     required: false
+  github-token:
+    description: Token used for repository checkout. Defaults to the workflow GITHUB_TOKEN.
+    required: false
+    default: ""
   document-all:
     description: Force a full re-documentation of every folder. When false, kitdoc documents the whole repo on the first run (no AGENTS.md on the Notion page yet) and only the changed folders afterwards.
     required: false
@@ -58,30 +70,106 @@ inputs:
     description: "Documentation depth from 1 to 10: 10 = scan the whole repo in detail, 5 = important things (default), 1 = a rough idea of what the repo does."
     required: false
     default: "5"
+  doc-concurrency:
+    description: Max concurrent LLM doc generations during a run.
+    required: false
+    default: "4"
 
 runs:
   using: composite
   steps:
+    - name: Validate inputs
+      shell: bash
+      env:
+        INPUT_TARGET_REPOSITORY: ${{ inputs.target-repository }}
+        INPUT_KITDOC_REPOSITORY: ${{ inputs.kitdoc-repository }}
+        INPUT_REPO_OWNER: ${{ inputs.repo-owner }}
+        INPUT_REPO_NAME: ${{ inputs.repo-name }}
+        INPUT_BASE_SHA: ${{ inputs.base-sha }}
+        INPUT_HEAD_SHA: ${{ inputs.head-sha }}
+        INPUT_TARGET_REF: ${{ inputs.target-ref }}
+        INPUT_KITDOC_REF: ${{ inputs.kitdoc-ref }}
+        INPUT_LLM_PROVIDER: ${{ inputs.llm-provider }}
+        INPUT_DEPTH: ${{ inputs.depth }}
+        INPUT_DOCUMENT_ALL: ${{ inputs.document-all }}
+        INPUT_DOC_CONCURRENCY: ${{ inputs.doc-concurrency }}
+        INPUT_SKIP_TARGET_CHECKOUT: ${{ inputs.skip-target-checkout }}
+        INPUT_SKIP_KITDOC_CHECKOUT: ${{ inputs.skip-kitdoc-checkout }}
+        INPUT_ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        INPUT_OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+        INPUT_NOTION_TOKEN: ${{ inputs.notion-token }}
+        INPUT_NOTION_PAGE_ID: ${{ inputs.notion-page-id }}
+      run: |
+        set -euo pipefail
+
+        slug='^[A-Za-z0-9._-]+$'
+        repo='^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$'
+        sha='^[0-9a-fA-F]{7,40}$'
+
+        [[ "$INPUT_TARGET_REPOSITORY" =~ $repo ]] || { echo "Invalid target-repository"; exit 1; }
+        [[ "$INPUT_KITDOC_REPOSITORY" =~ $repo ]] || { echo "Invalid kitdoc-repository"; exit 1; }
+        [[ "$INPUT_REPO_OWNER" =~ $slug ]] || { echo "Invalid repo-owner"; exit 1; }
+        [[ "$INPUT_REPO_NAME" =~ $slug ]] || { echo "Invalid repo-name"; exit 1; }
+        [[ "$INPUT_BASE_SHA" =~ $sha ]] || { echo "Invalid base-sha"; exit 1; }
+        [[ "$INPUT_HEAD_SHA" =~ $sha ]] || { echo "Invalid head-sha"; exit 1; }
+        [[ "$INPUT_TARGET_REF" =~ $sha ]] || { echo "Invalid target-ref"; exit 1; }
+        [[ "$INPUT_KITDOC_REF" =~ $sha ]] || { echo "Invalid kitdoc-ref"; exit 1; }
+        [[ "$INPUT_LLM_PROVIDER" == "anthropic" || "$INPUT_LLM_PROVIDER" == "openai" ]] || { echo "Invalid llm-provider"; exit 1; }
+        [[ "$INPUT_DOCUMENT_ALL" == "true" || "$INPUT_DOCUMENT_ALL" == "false" ]] || { echo "Invalid document-all"; exit 1; }
+        [[ "$INPUT_SKIP_TARGET_CHECKOUT" == "true" || "$INPUT_SKIP_TARGET_CHECKOUT" == "false" ]] || { echo "Invalid skip-target-checkout"; exit 1; }
+        [[ "$INPUT_SKIP_KITDOC_CHECKOUT" == "true" || "$INPUT_SKIP_KITDOC_CHECKOUT" == "false" ]] || { echo "Invalid skip-kitdoc-checkout"; exit 1; }
+        [[ "$INPUT_DEPTH" =~ ^[0-9]+$ ]] && (( INPUT_DEPTH >= 1 && INPUT_DEPTH <= 10 )) || { echo "Invalid depth"; exit 1; }
+        [[ "$INPUT_DOC_CONCURRENCY" =~ ^[0-9]+$ ]] && (( INPUT_DOC_CONCURRENCY >= 1 && INPUT_DOC_CONCURRENCY <= 8 )) || { echo "Invalid doc-concurrency"; exit 1; }
+        [[ -n "$INPUT_NOTION_TOKEN" ]] || { echo "Missing notion-token"; exit 1; }
+        [[ -n "$INPUT_NOTION_PAGE_ID" ]] || { echo "Missing notion-page-id"; exit 1; }
+
+        if [ "$INPUT_LLM_PROVIDER" = "anthropic" ]; then
+          [[ -n "$INPUT_ANTHROPIC_API_KEY" ]] || { echo "anthropic-api-key is required when llm-provider=anthropic"; exit 1; }
+        else
+          [[ -n "$INPUT_OPENAI_API_KEY" ]] || { echo "openai-api-key is required when llm-provider=openai"; exit 1; }
+        fi
+
     - name: Checkout target repository
-      uses: actions/checkout@v4
+      if: inputs.skip-target-checkout != 'true'
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364edaf087 # v4.2.2
       with:
         repository: ${{ inputs.target-repository }}
-        ref: ${{ inputs.target-ref }}
+        ref: ${{ inputs.head-sha }}
         path: ${{ inputs.target-path }}
-        fetch-depth: 0
+        fetch-depth: 1
+        token: ${{ inputs.github-token != '' && inputs.github-token || github.token }}
+
+    - name: Fetch git refs for incremental diff
+      if: inputs.document-all != 'true'
+      shell: bash
+      working-directory: ${{ github.workspace }}/${{ inputs.target-path }}
+      run: |
+        set -euo pipefail
+        git fetch --no-tags --depth=1 origin "${{ inputs.base-sha }}" 2>/dev/null || \
+          git fetch --no-tags --depth=64 origin "${{ inputs.base-sha }}"
+        git fetch --no-tags --depth=1 origin "${{ inputs.head-sha }}" 2>/dev/null || true
 
     - name: Checkout kitdoc
-      uses: actions/checkout@v4
+      if: inputs.skip-kitdoc-checkout != 'true'
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364edaf087 # v4.2.2
       with:
         repository: ${{ inputs.kitdoc-repository }}
         ref: ${{ inputs.kitdoc-ref }}
         path: ${{ inputs.kitdoc-path }}
         fetch-depth: 1
+        token: ${{ inputs.github-token != '' && inputs.github-token || github.token }}
+
+    - name: Setup Node.js
+      uses: actions/setup-node@49933ea528792ca6c148322314ed9a9a99a97e4a # v4.4.0
+      with:
+        node-version: "22"
+        cache: npm
+        cache-dependency-path: ${{ inputs.kitdoc-path }}/package-lock.json
 
     - name: Install kitdoc dependencies
       shell: bash
       working-directory: ${{ github.workspace }}/${{ inputs.kitdoc-path }}
-      run: npm ci
+      run: npm ci --prefer-offline --no-audit --no-fund
 
     - name: Generate and sync Notion docs
       shell: bash
@@ -90,25 +178,35 @@ runs:
         NOTION_TOKEN: ${{ inputs.notion-token }}
         NOTION_PAGE_ID: ${{ inputs.notion-page-id }}
         LLM_PROVIDER: ${{ inputs.llm-provider }}
-        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
-        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+        ANTHROPIC_API_KEY: ${{ inputs.llm-provider == 'anthropic' && inputs.anthropic-api-key || '' }}
+        OPENAI_API_KEY: ${{ inputs.llm-provider == 'openai' && inputs.openai-api-key || '' }}
+        KITDOC_DOC_CONCURRENCY: ${{ inputs.doc-concurrency }}
         TARGET_DIR: ${{ github.workspace }}/${{ inputs.target-path }}
+        KITDOC_REPO_OWNER: ${{ inputs.repo-owner }}
+        KITDOC_REPO_NAME: ${{ inputs.repo-name }}
+        KITDOC_BASE_SHA: ${{ inputs.base-sha }}
+        KITDOC_HEAD_SHA: ${{ inputs.head-sha }}
+        KITDOC_PROVIDER: ${{ inputs.llm-provider }}
+        KITDOC_DEPTH: ${{ inputs.depth }}
+        KITDOC_DOCUMENT_ALL: ${{ inputs.document-all }}
       run: |
-        if [ "${{ inputs.document-all }}" = "true" ]; then
+        set -euo pipefail
+
+        if [ "$KITDOC_DOCUMENT_ALL" = "true" ]; then
           npm run kitdoc -- \
             --dir "$TARGET_DIR" \
             --all \
-            --owner "${{ inputs.repo-owner }}" \
-            --repo "${{ inputs.repo-name }}" \
-            --provider "${{ inputs.llm-provider }}" \
-            --depth "${{ inputs.depth }}"
+            --owner "$KITDOC_REPO_OWNER" \
+            --repo "$KITDOC_REPO_NAME" \
+            --provider "$KITDOC_PROVIDER" \
+            --depth "$KITDOC_DEPTH"
         else
           npm run kitdoc -- \
             --dir "$TARGET_DIR" \
-            --base "${{ inputs.base-sha }}" \
-            --head "${{ inputs.head-sha }}" \
-            --owner "${{ inputs.repo-owner }}" \
-            --repo "${{ inputs.repo-name }}" \
-            --provider "${{ inputs.llm-provider }}" \
-            --depth "${{ inputs.depth }}"
+            --base "$KITDOC_BASE_SHA" \
+            --head "$KITDOC_HEAD_SHA" \
+            --owner "$KITDOC_REPO_OWNER" \
+            --repo "$KITDOC_REPO_NAME" \
+            --provider "$KITDOC_PROVIDER" \
+            --depth "$KITDOC_DEPTH"
         fi
