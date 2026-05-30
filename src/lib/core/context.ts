@@ -1,5 +1,5 @@
 import fg from "fast-glob";
-import { readFile as fsReadFile, stat } from "node:fs/promises";
+import { open, stat } from "node:fs/promises";
 import path from "node:path";
 import type { FetchedRepo, RepoMetadata } from "./fetcher";
 
@@ -69,9 +69,21 @@ export class RepoContext {
   }
 
   async readFile(p: string, maxBytes = 64 * 1024): Promise<string> {
-    const buf = await fsReadFile(this.abs(p));
-    if (buf.byteLength <= maxBytes) return buf.toString("utf8");
-    return buf.subarray(0, maxBytes).toString("utf8") + `\n\n[... truncated, ${buf.byteLength - maxBytes} bytes omitted ...]`;
+    const filePath = this.abs(p);
+    const handle = await open(filePath, "r");
+    try {
+      const info = await handle.stat();
+      const toRead = Math.min(info.size, maxBytes);
+      const buf = Buffer.alloc(toRead);
+      if (toRead > 0) await handle.read(buf, 0, toRead, 0);
+      const text = buf.toString("utf8");
+      if (info.size > maxBytes) {
+        return text + `\n\n[... truncated, ${info.size - maxBytes} bytes omitted ...]`;
+      }
+      return text;
+    } finally {
+      await handle.close();
+    }
   }
 
   async readJson<T = unknown>(p: string): Promise<T | null> {
@@ -92,14 +104,6 @@ export class RepoContext {
       followSymbolicLinks: false,
     });
     return matches;
-  }
-
-  async findFirst(patterns: string[]): Promise<string | null> {
-    for (const pattern of patterns) {
-      const matches = await this.glob(pattern);
-      if (matches.length > 0) return matches[0];
-    }
-    return null;
   }
 
   async findFiles(patterns: string[], limit = 50): Promise<string[]> {
@@ -151,22 +155,6 @@ export class RepoContext {
     for (const f of this.fileTree) {
       const idx = f.indexOf("/");
       if (idx > 0) set.add(f.slice(0, idx));
-    }
-    return [...set].sort();
-  }
-
-  /**
-   * Every directory that contains at least one file, including nested ones.
-   * Used to document the whole repository, not just top-level folders.
-   */
-  allDirs(maxDepth = 4): string[] {
-    const set = new Set<string>();
-    for (const f of this.fileTree) {
-      const parts = f.split("/");
-      // Drop the filename; walk every ancestor directory up to maxDepth.
-      for (let i = 1; i < parts.length && i <= maxDepth; i++) {
-        set.add(parts.slice(0, i).join("/"));
-      }
     }
     return [...set].sort();
   }

@@ -1,5 +1,6 @@
 import type { RepoContext } from "./context";
 import { mapWithConcurrency } from "./concurrency";
+import { ROOT_CHANGE } from "./diff";
 import { generateAgentsDoc, type DocManifest } from "./generators/agent";
 import { folderGenerator } from "./generators/folder";
 import { isDocumentableFile } from "./generators/file";
@@ -79,6 +80,11 @@ export interface DocumentRepoOptions {
   minFolderFiles?: number;
   changedRoots?: string[] | null;
   onEvent?: (event: DocTreeEvent) => void;
+  signal?: AbortSignal;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new Error("Documentation run aborted.");
 }
 
 interface DirNode {
@@ -91,7 +97,12 @@ interface DirNode {
 export function buildTree(files: string[], roots?: string[]): DirNode {
   const root: DirNode = { path: "", name: "", dirs: new Map(), files: [] };
   for (const file of files) {
-    if (roots && !roots.some((r) => file === r || file.startsWith(`${r}/`))) continue;
+    if (roots && roots.length > 0) {
+      const includeAll = roots.includes(ROOT_CHANGE);
+      if (!includeAll && !roots.some((r) => r !== ROOT_CHANGE && (file === r || file.startsWith(`${r}/`)))) {
+        continue;
+      }
+    }
     const parts = file.split("/");
     let node = root;
     for (let i = 0; i < parts.length - 1; i++) {
@@ -132,8 +143,9 @@ async function documentDirNode(
   parentPageId: string,
   manifest: DocManifest,
   opts: Required<Pick<DocumentRepoOptions, "ctx" | "llm" | "sink" | "depth" | "minFolderFiles">> &
-    Pick<DocumentRepoOptions, "onEvent">,
+    Pick<DocumentRepoOptions, "onEvent" | "signal">,
 ): Promise<void> {
+  throwIfAborted(opts.signal);
   if (!isSignificant(child, opts.minFolderFiles)) {
     manifest.skipped.push(child.path);
     await documentChildren(child, parentPageId, manifest, opts);
@@ -157,6 +169,7 @@ async function documentDirNode(
 
   await documentChildren(child, folderPageId, manifest, opts);
 
+  throwIfAborted(opts.signal);
   try {
     const folderDoc = await llmSlots.use(() => folderGenerator(child.path, { deep }).run(opts.ctx, opts.llm, opts.depth));
     const result = { ...folderDoc, filename };
@@ -191,8 +204,9 @@ async function documentChildren(
   parentPageId: string,
   manifest: DocManifest,
   opts: Required<Pick<DocumentRepoOptions, "ctx" | "llm" | "sink" | "depth" | "minFolderFiles">> &
-    Pick<DocumentRepoOptions, "onEvent">,
+    Pick<DocumentRepoOptions, "onEvent" | "signal">,
 ): Promise<void> {
+  throwIfAborted(opts.signal);
   const children = [...node.dirs.values()].sort((a, b) => a.name.localeCompare(b.name));
   await mapWithConcurrency(children, DOC_CONCURRENCY, (child) =>
     documentDirNode(child, parentPageId, manifest, opts),
@@ -214,14 +228,17 @@ export async function documentRepo(opts: DocumentRepoOptions): Promise<DocManife
     depth: opts.depth,
     minFolderFiles,
     onEvent: opts.onEvent,
+    signal: opts.signal,
   };
 
+  throwIfAborted(opts.signal);
   for (const { gen, title, filename, icon } of ROOT_DOCS) {
     opts.onEvent?.({ type: "doc:started", id: filename, title, filename, icon, parentId: opts.parentPageId, kind: "root" });
   }
 
   const completedRoots = new Set<string>();
   await mapWithConcurrency(ROOT_DOCS, DOC_CONCURRENCY, async ({ gen, title, filename, icon }) => {
+    throwIfAborted(opts.signal);
     try {
       const doc = await llmSlots.use(() => gen.run(opts.ctx, opts.llm, opts.depth));
       const pageId = await opts.sink.ensure(opts.parentPageId, title, icon, title);
@@ -260,6 +277,7 @@ export async function documentRepo(opts: DocumentRepoOptions): Promise<DocManife
   const tree = buildTree(opts.ctx.fileTree, opts.changedRoots ?? undefined);
   await documentChildren(tree, opts.parentPageId, manifest, childOpts);
 
+  throwIfAborted(opts.signal);
   opts.onEvent?.({
     type: "doc:started",
     id: AGENTS_PAGE_TITLE,

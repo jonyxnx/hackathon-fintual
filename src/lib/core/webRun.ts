@@ -8,16 +8,27 @@ import { parseGitHubUrl } from "./url";
 
 export type Phase = "parsing" | "fetching" | "ready";
 
+/** Cap files sent to the browser so large repos don't overwhelm the SSE stream. */
+export const WEB_FILE_TREE_LIMIT = 2000;
+
 export type WebDocEvent =
   | { type: "phase"; phase: Phase; detail?: string }
-  | { type: "repo"; owner: string; repo: string; ref: string; fileTree: string[] }
+  | {
+      type: "repo";
+      owner: string;
+      repo: string;
+      ref: string;
+      fileTree: string[];
+      fileTreeTotal: number;
+    }
   | DocTreeEvent
-  | { type: "complete"; results: GeneratorResult[] }
+  | { type: "complete"; results: GeneratorResult[]; failedCount: number }
   | { type: "error"; error: string };
 
 export interface WebRunOptions {
   url: string;
   provider?: ProviderName;
+  signal?: AbortSignal;
 }
 
 class CollectingSink implements DocSink {
@@ -55,6 +66,8 @@ class EventQueue<T> {
 export async function* runWebDocSet(opts: WebRunOptions): AsyncGenerator<WebDocEvent> {
   let cleanup: (() => Promise<void>) | null = null;
   try {
+    if (opts.signal?.aborted) return;
+
     yield { type: "phase", phase: "parsing" };
     const parsed = parseGitHubUrl(opts.url);
     const llm = getLLM(opts.provider);
@@ -65,10 +78,18 @@ export async function* runWebDocSet(opts: WebRunOptions): AsyncGenerator<WebDocE
     cleanup = fetched.cleanup;
     const ctx = new RepoContext(fetched);
 
-    yield { type: "repo", owner: ctx.owner, repo: ctx.repo, ref: ctx.ref, fileTree: ctx.fileTree };
+    yield {
+      type: "repo",
+      owner: ctx.owner,
+      repo: ctx.repo,
+      ref: ctx.ref,
+      fileTree: ctx.fileTree.slice(0, WEB_FILE_TREE_LIMIT),
+      fileTreeTotal: ctx.fileTree.length,
+    };
     yield { type: "phase", phase: "ready" };
 
     const results: GeneratorResult[] = [];
+    let failedCount = 0;
     const queue = new EventQueue<WebDocEvent>();
     const run = documentRepo({
       ctx,
@@ -78,27 +99,33 @@ export async function* runWebDocSet(opts: WebRunOptions): AsyncGenerator<WebDocE
       parentPageId: "repo",
       fullRun: true,
       minFolderFiles: WEB_MIN_FOLDER_FILES,
+      signal: opts.signal,
       onEvent: (event) => {
         queue.push(event);
         if (event.type === "doc:done" && event.result) results.push(event.result);
+        if (event.type === "doc:failed") failedCount += 1;
       },
     })
       .then(() => {
-        queue.push({ type: "complete", results });
+        queue.push({ type: "complete", results, failedCount });
       })
       .catch((err) => {
+        if (opts.signal?.aborted) return;
         queue.push({ type: "error", error: (err as Error).message ?? String(err) });
       })
       .finally(() => queue.close());
 
     for (;;) {
+      if (opts.signal?.aborted) break;
       const event = await queue.shift();
       if (!event) break;
       yield event;
     }
     await run;
   } catch (err) {
-    yield { type: "error", error: (err as Error).message ?? String(err) };
+    if (!opts.signal?.aborted) {
+      yield { type: "error", error: (err as Error).message ?? String(err) };
+    }
   } finally {
     if (cleanup) {
       try {

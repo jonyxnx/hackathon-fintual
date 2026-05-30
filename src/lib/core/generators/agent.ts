@@ -139,6 +139,3 @@ ${depthGuidance(depth)}`;
   const content = await llm.complete({ system: AGENT_SYSTEM_PROMPT, user, maxTokens: scaledTokens(3500, depth) });
   return { filename: "AGENTS.md", content, signals: paths };
 }
-
-/** @deprecated Use generateAgentsDoc */
-export const generateAgentDoc = generateAgentsDoc;

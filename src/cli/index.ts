@@ -11,6 +11,7 @@ import {
   documentRepo,
   type DocSink,
 } from "../lib/core/docTree";
+import { ROOT_CHANGE } from "../lib/core/diff";
 import { DEFAULT_DEPTH, resolveDepth } from "../lib/core/generators";
 import { REPO_ICON } from "../lib/core/icons";
 import { getLLM, type ProviderName } from "../lib/core/llm";
@@ -251,7 +252,8 @@ async function main(): Promise<void> {
   if (fullRun) {
     console.log("Documenting whole repository.");
   } else {
-    console.log(`Documenting changed folders: ${(changedRoots ?? []).join(", ") || "(none)"}.`);
+    const labels = (changedRoots ?? []).map((dir) => (dir === ROOT_CHANGE ? "root files" : dir));
+    console.log(`Documenting changed folders: ${labels.join(", ") || "(none)"}.`);
   }
   const manifest = await documentRepo({
     ctx,

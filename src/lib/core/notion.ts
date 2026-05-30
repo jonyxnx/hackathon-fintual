@@ -38,29 +38,6 @@ export class NotionDocs {
     return this.ensureChildPage(parentPageId, title, icon);
   }
 
-  async upsertFolderPage(
-    repoPageId: string,
-    folderTitle: string,
-    markdown: string,
-    icon?: string,
-  ): Promise<NotionPageRef> {
-    return this.upsertMarkdownPage(repoPageId, folderTitle, markdown, icon);
-  }
-
-  async upsertMarkdownPage(
-    parentPageId: string,
-    title: string,
-    markdown: string,
-    icon?: string,
-  ): Promise<NotionPageRef> {
-    const page = await this.ensureChildPage(parentPageId, title, icon);
-    // Preserve nested child pages so re-running keeps the documentation tree;
-    // only the prose content of this page is refreshed.
-    await this.clearContentBlocks(page.id);
-    await this.appendMarkdown(page.id, markdown);
-    return page;
-  }
-
   /**
    * Ensure a child page exists (creating it if needed) and set its icon, without
    * touching its content. Callers can create nested subpages before writing the

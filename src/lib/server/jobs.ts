@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { GeneratorResult } from "@/lib/core/generators";
 
 interface Job {
@@ -11,7 +12,7 @@ const jobs = new Map<string, Job>();
 const TTL_MS = 30 * 60 * 1000;
 
 export function createJob(): string {
-  const id = Math.random().toString(36).slice(2, 12);
+  const id = randomUUID();
   jobs.set(id, { id, createdAt: Date.now() });
   sweep();
   return id;
@@ -19,7 +20,10 @@ export function createJob(): string {
 
 export function setJobArtifact(id: string, zip: Buffer, results: GeneratorResult[]) {
   const job = jobs.get(id);
-  if (!job) return;
+  if (!job) {
+    console.warn(`[kitdoc] Job ${id} expired before zip artifact could be stored.`);
+    return;
+  }
   job.zip = zip;
   job.results = results;
 }

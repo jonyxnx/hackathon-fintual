@@ -15,6 +15,7 @@ export interface DocNavItem {
 interface Props {
   docs: DocNavItem[];
   files: string[];
+  fileCount?: number;
   selectedId: string | null;
   onSelect: (id: string) => void;
 }
@@ -26,10 +27,11 @@ function folderDepth(id: string): number {
   return id.includes("/") ? id.split("/").length - 1 : 0;
 }
 
-export function DocTree({ docs, files, selectedId, onSelect }: Props) {
+export function DocTree({ docs, files, fileCount, selectedId, onSelect }: Props) {
   const [filesOpen, setFilesOpen] = useState(false);
   const rootDocs = docs.filter((doc) => doc.kind === "root" || doc.kind === "agent");
   const folderDocs = docs.filter((doc) => doc.kind === "folder").sort((a, b) => a.id.localeCompare(b.id));
+  const totalFiles = fileCount ?? files.length;
   const fileNodes = useMemo(() => buildFileTree(files), [files]);
   const nodeBudget = { remaining: MAX_TREE_NODES };
 
@@ -70,7 +72,7 @@ export function DocTree({ docs, files, selectedId, onSelect }: Props) {
           aria-expanded={filesOpen}
         >
           <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-stone-400">
-            Files {files.length ? `(${files.length})` : ""}
+            Files {totalFiles ? `(${totalFiles})` : ""}
           </span>
           <span className="text-[10px] text-stone-400">{filesOpen ? "Hide" : "Show"}</span>
         </button>
@@ -80,7 +82,7 @@ export function DocTree({ docs, files, selectedId, onSelect }: Props) {
             {fileNodes.map((node) => (
               <FileNodeView key={node.path} node={node} depth={0} budget={nodeBudget} />
             ))}
-            {nodeBudget.remaining <= 0 && files.length > 0 && (
+            {nodeBudget.remaining <= 0 && totalFiles > 0 && (
               <p className="px-2 py-1 text-[10px] text-stone-400">Tree truncated for size. Download the zip for the full repo map.</p>
             )}
             {files.length === 0 && <p className="px-2 py-1 text-xs text-stone-400">Repo files will appear here.</p>}

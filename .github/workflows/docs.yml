@@ -39,9 +39,11 @@ jobs:
           kitdoc-ref: ${{ github.sha }}
           skip-kitdoc-checkout: "true"
           kitdoc-path: .
+          document-all: "false"
+          depth: "5"
+          doc-concurrency: "4"
           llm-provider: ${{ vars.LLM_PROVIDER || 'openai' }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          doc-concurrency: "4"
           notion-token: ${{ secrets.NOTION_TOKEN }}
           notion-page-id: ${{ secrets.NOTION_PAGE_ID }}

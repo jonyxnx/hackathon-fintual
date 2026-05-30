@@ -72,7 +72,8 @@ export async function fetchRepo(parsed: ParsedRepo): Promise<FetchedRepo> {
     });
 
   const defaultBranch = repoInfo.data.default_branch;
-  const ref = parsed.ref || defaultBranch;
+  const requestedRef = parsed.ref || defaultBranch;
+  let resolvedRef = requestedRef;
 
   const langs = await octokit.repos
     .listLanguages({ owner: parsed.owner, repo: parsed.repo })
@@ -80,10 +81,15 @@ export async function fetchRepo(parsed: ParsedRepo): Promise<FetchedRepo> {
 
   const topics = (repoInfo.data.topics as string[] | undefined) ?? [];
 
-  const tempDir = await mkdtemp(path.join(tmpdir(), "auto-doc-"));
+  const tempDir = await mkdtemp(path.join(tmpdir(), "kitdoc-"));
   try {
-    await downloadAndExtractTarball(octokit, parsed.owner, parsed.repo, ref, tempDir);
-  } catch {
+    await downloadAndExtractTarball(octokit, parsed.owner, parsed.repo, requestedRef, tempDir);
+  } catch (err) {
+    if (requestedRef === defaultBranch) throw err;
+    console.warn(
+      `[kitdoc] Ref "${requestedRef}" unavailable for ${parsed.owner}/${parsed.repo}; using "${defaultBranch}".`,
+    );
+    resolvedRef = defaultBranch;
     await downloadAndExtractTarball(octokit, parsed.owner, parsed.repo, defaultBranch, tempDir);
   }
 
@@ -96,7 +102,7 @@ export async function fetchRepo(parsed: ParsedRepo): Promise<FetchedRepo> {
   });
 
   return {
-    parsed: { owner: parsed.owner, repo: parsed.repo, ref },
+    parsed: { owner: parsed.owner, repo: parsed.repo, ref: resolvedRef },
     tempDir,
     fileTree,
     metadata: {

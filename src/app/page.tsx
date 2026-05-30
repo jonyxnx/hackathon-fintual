@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { UrlForm } from "@/components/UrlForm";
 import { PhaseIndicator } from "@/components/PhaseIndicator";
 import { PixelCat } from "@/components/PixelCat";
@@ -21,6 +21,9 @@ export default function Home() {
   const [phase, setPhase] = useState<UIPhase>(null);
   const [target, setTarget] = useState<string | null>(null);
   const [fileTree, setFileTree] = useState<string[]>([]);
+  const [fileTreeTotal, setFileTreeTotal] = useState(0);
+  const [failedDocCount, setFailedDocCount] = useState(0);
+  const abortRef = useRef<AbortController | null>(null);
   const [docs, setDocs] = useState<Record<string, DocRuntime>>({});
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
@@ -32,6 +35,8 @@ export default function Home() {
     setPhase("parsing");
     setTarget(null);
     setFileTree([]);
+    setFileTreeTotal(0);
+    setFailedDocCount(0);
     setDocs({});
     setSelectedDocId(null);
     setDownloadUrl(null);
@@ -40,6 +45,9 @@ export default function Home() {
   }
 
   async function handleSubmit(url: string, provider: "anthropic" | "openai") {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     resetState();
 
     try {
@@ -47,7 +55,13 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url, provider }),
+        signal: controller.signal,
       });
+
+      if (!res.ok) {
+        const message = await res.text().catch(() => "");
+        throw new Error(message || `Request failed (${res.status})`);
+      }
 
       if (!res.body) throw new Error("No response body");
 
@@ -63,15 +77,20 @@ export default function Home() {
         buffer = events.pop() ?? "";
 
         for (const block of events) {
+          if (!block.trim() || block.startsWith(":")) continue;
           const lines = block.split("\n");
           const event = lines.find((l) => l.startsWith("event: "))?.slice(7);
           const dataLine = lines.find((l) => l.startsWith("data: "))?.slice(6);
           if (!event || !dataLine) continue;
-          const data = JSON.parse(dataLine);
-          handleEvent(event, data);
+          try {
+            handleEvent(event, JSON.parse(dataLine));
+          } catch {
+            // Ignore malformed SSE chunks.
+          }
         }
       }
     } catch (err) {
+      if ((err as Error).name === "AbortError") return;
       setError((err as Error).message);
     } finally {
       setRunning(false);
@@ -85,6 +104,7 @@ export default function Home() {
     } else if (event === "repo") {
       setTarget(`${d.owner}/${d.repo}@${d.ref}`);
       setFileTree((d.fileTree as string[]) ?? []);
+      setFileTreeTotal((d.fileTreeTotal as number) ?? (d.fileTree as string[])?.length ?? 0);
       setPhase("generating");
     } else if (event === "doc:started") {
       const id = d.id as string;
@@ -101,12 +121,14 @@ export default function Home() {
       }));
     } else if (event === "doc:failed") {
       const id = d.id as string;
+      setFailedDocCount((count) => count + 1);
       setDocs((prev) => ({
         ...prev,
         [id]: docFromEvent(d, "failed"),
       }));
     } else if (event === "complete") {
       setPhase("complete");
+      if (typeof d.failedCount === "number") setFailedDocCount(d.failedCount);
     } else if (event === "download") {
       setDownloadUrl(d.url as string);
     } else if (event === "error") {
@@ -225,9 +247,21 @@ export default function Home() {
           </div>
         )}
 
+        {failedDocCount > 0 && (
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            {failedDocCount} doc{failedDocCount === 1 ? "" : "s"} failed — download the zip for everything that succeeded.
+          </div>
+        )}
+
         {showExplorer && (
           <section className="grid h-[calc(100dvh-13rem)] max-h-[calc(100dvh-13rem)] min-h-[360px] flex-1 grid-cols-1 gap-3 overflow-hidden lg:grid-cols-[240px_minmax(0,1fr)]">
-            <DocTree docs={docList} files={fileTree} selectedId={selectedDocId} onSelect={setSelectedDocId} />
+            <DocTree
+              docs={docList}
+              files={fileTree}
+              fileCount={fileTreeTotal || fileTree.length}
+              selectedId={selectedDocId}
+              onSelect={setSelectedDocId}
+            />
             <div className="flex min-h-0 flex-col overflow-hidden">
               <MarkdownPreview file={previewFile} />
             </div>

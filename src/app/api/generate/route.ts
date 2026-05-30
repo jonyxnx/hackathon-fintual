@@ -1,6 +1,8 @@
 import { zipResults } from "@/lib/core/zip";
 import { createJob, setJobArtifact } from "@/lib/server/jobs";
+import { unauthorizedResponse } from "@/lib/server/apiAuth";
 import type { ProviderName } from "@/lib/core/llm";
+import { parseGitHubUrl } from "@/lib/core/url";
 import { runWebDocSet } from "@/lib/core/webRun";
 
 export const runtime = "nodejs";
@@ -12,13 +14,22 @@ function sseLine(event: string, data: unknown): string {
 }
 
 export async function POST(req: Request) {
-  let body: { url?: string; provider?: ProviderName; only?: string[] };
+  const authError = unauthorizedResponse(req);
+  if (authError) return authError;
+
+  let body: { url?: string; provider?: ProviderName };
   try {
     body = await req.json();
   } catch {
     return new Response("Invalid JSON body", { status: 400 });
   }
   if (!body.url) return new Response("Missing url", { status: 400 });
+
+  try {
+    parseGitHubUrl(body.url);
+  } catch (err) {
+    return new Response((err as Error).message, { status: 400 });
+  }
 
   const jobId = createJob();
 
@@ -52,7 +63,9 @@ export async function POST(req: Request) {
         for await (const evt of runWebDocSet({
           url: body.url!,
           provider: body.provider,
+          signal: req.signal,
         })) {
+          if (closed || req.signal.aborted) break;
           if (!send(evt.type, evt)) break;
           if (evt.type === "complete") {
             const zip = await zipResults(evt.results);
@@ -61,7 +74,9 @@ export async function POST(req: Request) {
           }
         }
       } catch (err) {
-        send("error", { error: (err as Error).message ?? String(err) });
+        if (!req.signal.aborted) {
+          send("error", { error: (err as Error).message ?? String(err) });
+        }
       } finally {
         clearInterval(heartbeat);
         if (!closed) {

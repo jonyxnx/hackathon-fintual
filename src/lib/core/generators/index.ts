@@ -7,12 +7,6 @@ import {
   compressionNote,
   resolveFileBudgets,
 } from "../promptCompress";
-import { overview } from "./overview";
-import { setup } from "./setup";
-import { testing } from "./testing";
-import { deployment } from "./deployment";
-import { conventions } from "./conventions";
-import { migrations } from "./migrations";
 
 export interface GeneratorResult {
   filename: string;
@@ -78,21 +72,6 @@ export interface Generator {
   title: string;
   filename: string;
   run(ctx: RepoContext, llm: LLMProvider, depth?: DepthConfig): Promise<GeneratorResult>;
-}
-
-export const ALL_GENERATORS: Generator[] = [
-  overview,
-  setup,
-  testing,
-  deployment,
-  conventions,
-  migrations,
-];
-
-export function getGenerators(ids?: string[]): Generator[] {
-  if (!ids || ids.length === 0) return ALL_GENERATORS;
-  const set = new Set(ids);
-  return ALL_GENERATORS.filter((g) => set.has(g.id));
 }
 
 const FALLBACK_CONTEXT_PATTERNS = [
